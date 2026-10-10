@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(!.env.example)",
+      "Edit(./.env)",
+      "Read(//home/clworker/**)",
+      "Edit(//home/clworker/**)",
+      "Read(//opt/chosen-local/**)",
+      "Edit(//opt/chosen-local/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.config/gh/**)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(sudo *)",
+      "Bash(docker *)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(dangerouslyDisableSandbox:true)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "excludedCommands": [
+      "uv run pytest",
+      "uv run pytest *",
+      "dbmate *",
+      "uv run python -m worker",
+      "uv run python -m worker *",
+      "uv run python -m evals.run *",
+      "docker compose -f deploy/compose.dev.yml *"
+    ],
+    "filesystem": {
+      "denyRead": [
+        "/home/clworker",
+        "/opt/chosen-local",
+        "~/.ssh",
+        "~/.config/gh",
+        "./.env"
+      ]
+    }
+  }
+}
