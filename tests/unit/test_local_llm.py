@@ -26,7 +26,9 @@ def _chat(content: str, prompt_tokens: int = 7, completion_tokens: int = 3) -> d
 
 
 def _client(handler) -> LocalLLM:
-    return LocalLLM("http://127.0.0.1:8080/v1", "test-model", transport=httpx.MockTransport(handler))
+    return LocalLLM(
+        "http://127.0.0.1:8080/v1", "test-model", transport=httpx.MockTransport(handler)
+    )
 
 
 def test_valid_output_and_request_shape():
@@ -37,8 +39,9 @@ def test_valid_output_and_request_shape():
         seen.append(json.loads(request.content))
         return httpx.Response(200, json=_chat('{"ok": true, "echo": "abc123"}'))
 
-    result = _client(handler).complete([{"role": "user", "content": "abc123"}], Out,
-                                       prompt_version="healthcheck/echo.v1")
+    result = _client(handler).complete(
+        [{"role": "user", "content": "abc123"}], Out, prompt_version="healthcheck/echo.v1"
+    )
     assert result.value == Out(ok=True, echo="abc123")
     assert (result.tokens_in, result.tokens_out, result.attempts) == (7, 3, 1)
     body = seen[0]
@@ -56,8 +59,9 @@ def test_retries_once_with_structural_hint_then_succeeds():
         bodies.append(json.loads(request.content))
         return httpx.Response(200, json=_chat(next(replies)))
 
-    result = _client(handler).complete([{"role": "user", "content": "x1y2z3"}], Out,
-                                       prompt_version="p.v1")
+    result = _client(handler).complete(
+        [{"role": "user", "content": "x1y2z3"}], Out, prompt_version="p.v1"
+    )
     assert result.attempts == 2
     assert result.tokens_in == 14
     hint = bodies[1]["messages"][-1]["content"]
@@ -90,8 +94,9 @@ def test_connection_refused_is_retryable():
         _client(handler).complete([{"role": "user", "content": "q"}], Out, prompt_version="p.v1")
 
 
-@pytest.mark.parametrize("url", ["https://api.openai.com/v1", "http://10.0.0.5:8080/v1",
-                                 "http://my-gpu-box:8080/v1"])
+@pytest.mark.parametrize(
+    "url", ["https://api.openai.com/v1", "http://10.0.0.5:8080/v1", "http://my-gpu-box:8080/v1"]
+)
 def test_refuses_non_local_base_url(url: str):
     with pytest.raises(ValueError):
         LocalLLM(url, "m")
@@ -100,7 +105,9 @@ def test_refuses_non_local_base_url(url: str):
 def test_logs_never_contain_prompt_or_output(sentinels):
     secret_in = sentinels["transcript_sentences"][0]
     secret_out = sentinels["names"][0]
-    replies = iter([json.dumps({"ok": True}) + secret_out, json.dumps({"ok": True, "echo": secret_out})])
+    replies = iter(
+        [json.dumps({"ok": True}) + secret_out, json.dumps({"ok": True, "echo": secret_out})]
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_chat(next(replies)))

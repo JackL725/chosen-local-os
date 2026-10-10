@@ -92,8 +92,11 @@ def test_settings_reject_non_local_model_and_need_private_dir(monkeypatch):
     with pytest.raises(ValidationError):
         Settings(database_url="postgres://x@127.0.0.1/y")  # type: ignore[call-arg]
     with pytest.raises(ValidationError):
-        Settings(database_url="postgres://x@127.0.0.1/y", private_data_dir=Path("evals/synthetic"),
-                 local_llm_base_url="https://api.openai.com/v1")
+        Settings(
+            database_url="postgres://x@127.0.0.1/y",
+            private_data_dir=Path("evals/synthetic"),
+            local_llm_base_url="https://api.openai.com/v1",
+        )
     s = Settings(database_url="postgres://x@127.0.0.1/y", private_data_dir=Path("evals/synthetic"))
     assert s.local_llm_thinking is False
 

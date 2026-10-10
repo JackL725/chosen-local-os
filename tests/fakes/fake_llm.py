@@ -43,6 +43,13 @@ class FakeLLM:
                 value = schema.model_validate_json(self.responder(messages))
             except ValidationError:
                 continue
-            return LLMResult(value=value, model=self.model_name, prompt_version=prompt_version,
-                             tokens_in=10, tokens_out=5, latency_ms=1, attempts=attempt)
+            return LLMResult(
+                value=value,
+                model=self.model_name,
+                prompt_version=prompt_version,
+                tokens_in=10,
+                tokens_out=5,
+                latency_ms=1,
+                attempts=attempt,
+            )
         raise ModelOutputInvalid()

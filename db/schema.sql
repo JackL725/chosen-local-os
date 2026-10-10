@@ -59,29 +59,34 @@ END $$;
 
 
 --
--- Name: queue_health(numeric); Type: FUNCTION; Schema: api; Owner: -
+-- Name: queue_health(numeric, integer, integer); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION api.queue_health(p_threshold_hours numeric) RETURNS TABLE(oldest_pending_job_id uuid, oldest_pending_job_type text, oldest_pending_age_min integer, pending_count integer, dead_last_24h integer, newest_heartbeat_age_min integer, is_stale boolean, workers_silent boolean)
+CREATE FUNCTION api.queue_health(p_threshold_hours numeric, p_check_every_min integer DEFAULT 15, p_repeat_minutes integer DEFAULT 240) RETURNS TABLE(oldest_pending_job_id uuid, oldest_pending_job_type text, oldest_pending_age_min integer, pending_count integer, failed_last_24h integer, newest_heartbeat_age_min integer, is_stale boolean, should_alert boolean)
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
   WITH oldest AS (
-    SELECT id, job_type, run_after FROM jobs
+    SELECT id, job_type, run_after,
+           (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
+      FROM jobs
      WHERE status = 'pending' AND run_after <= now()
      ORDER BY run_after LIMIT 1
   ), hb AS (
     SELECT max(last_seen_at) AS last_seen FROM worker_heartbeats
+  ), s AS (
+    SELECT o.*, hb.last_seen, (p_threshold_hours * 60)::integer AS threshold_min
+      FROM hb LEFT JOIN oldest o ON true
   )
-  SELECT o.id, o.job_type,
-         (extract(epoch FROM now() - o.run_after) / 60)::integer,
+  SELECT s.id, s.job_type, s.age_min,
          (SELECT count(*) FROM jobs WHERE status = 'pending')::integer,
-         (SELECT count(*) FROM jobs WHERE status = 'dead' AND finished_at > now() - interval '24 hours')::integer,
-         (extract(epoch FROM now() - hb.last_seen) / 60)::integer,
-         coalesce(o.run_after < now() - make_interval(secs => p_threshold_hours * 3600), false),
-         o.id IS NOT NULL AND (hb.last_seen IS NULL
-                               OR hb.last_seen < now() - make_interval(secs => p_threshold_hours * 3600))
-    FROM hb LEFT JOIN oldest o ON true
+         (SELECT count(*) FROM jobs WHERE status = 'failed' AND finished_at > now() - interval '24 hours')::integer,
+         (extract(epoch FROM now() - s.last_seen) / 60)::integer,
+         coalesce(s.age_min >= s.threshold_min, false),
+         coalesce(s.age_min >= s.threshold_min
+                  AND (s.age_min - s.threshold_min) % greatest(p_repeat_minutes, 1) < p_check_every_min,
+                  false)
+    FROM s
 $$;
 
 
@@ -853,7 +858,7 @@ CREATE TABLE public.jobs (
     CONSTRAINT jobs_error_detail_check CHECK ((length(error_detail) <= 500)),
     CONSTRAINT jobs_job_type_check CHECK ((job_type ~ '^[a-z][a-z0-9_]*$'::text)),
     CONSTRAINT jobs_max_attempts_check CHECK (((max_attempts >= 1) AND (max_attempts <= 10))),
-    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'dead'::text, 'cancelled'::text])))
+    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
 
@@ -1593,7 +1598,7 @@ CREATE TRIGGER ads_updated_at BEFORE UPDATE ON public.ads FOR EACH ROW EXECUTE F
 -- Name: approvals approvals_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER approvals_events AFTER INSERT OR DELETE OR UPDATE ON public.approvals FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+CREATE TRIGGER approvals_events AFTER INSERT OR DELETE OR UPDATE ON public.approvals FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'decision_note');
 
 
 --
@@ -1691,7 +1696,7 @@ CREATE TRIGGER coaches_updated_at BEFORE UPDATE ON public.coaches FOR EACH ROW E
 -- Name: commission_adjustments commission_adjustments_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER commission_adjustments_events AFTER INSERT OR DELETE OR UPDATE ON public.commission_adjustments FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+CREATE TRIGGER commission_adjustments_events AFTER INSERT OR DELETE OR UPDATE ON public.commission_adjustments FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'reason');
 
 
 --
@@ -1768,7 +1773,7 @@ CREATE TRIGGER fit_calls_updated_at BEFORE UPDATE ON public.fit_calls FOR EACH R
 -- Name: jobs jobs_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER jobs_events AFTER INSERT OR DELETE OR UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+CREATE TRIGGER jobs_events AFTER INSERT OR DELETE OR UPDATE ON public.jobs FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'payload', 'result_ref', 'error_detail');
 
 
 --
@@ -1922,7 +1927,7 @@ CREATE TRIGGER templates_updated_at BEFORE UPDATE ON public.templates FOR EACH R
 -- Name: vetting_items vetting_items_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER vetting_items_events AFTER INSERT OR DELETE OR UPDATE ON public.vetting_items FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'notes');
+CREATE TRIGGER vetting_items_events AFTER INSERT OR DELETE OR UPDATE ON public.vetting_items FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'notes', 'evidence_location');
 
 
 --

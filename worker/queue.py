@@ -67,8 +67,15 @@ def enqueue(
             """INSERT INTO jobs (job_type, payload, max_attempts, priority, idempotency_key,
                                  entity_type, entity_id)
                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (job_type, Jsonb(payload or {}), max_attempts, priority, idempotency_key,
-             entity_type, entity_id),
+            (
+                job_type,
+                Jsonb(payload or {}),
+                max_attempts,
+                priority,
+                idempotency_key,
+                entity_type,
+                entity_id,
+            ),
         )
         row = cur.fetchone()
     assert row is not None
@@ -116,8 +123,7 @@ def complete(
     writes: Any = None,
 ) -> bool:
     """Commit the handler's writes, the job's success and its event together."""
-    with transaction(conn, actor=ACTOR, job_id=job.id, prompt_version=prompt_version,
-                     model=model):
+    with transaction(conn, actor=ACTOR, job_id=job.id, prompt_version=prompt_version, model=model):
         if writes is not None:
             writes(conn)
         with conn.cursor() as cur:
@@ -133,9 +139,18 @@ def complete(
                 raise LeaseLost()
             cur.execute(
                 "SELECT ledger_emit('job', %s, 'job.succeeded', %s, %s, %s)",
-                (job.id, Jsonb({"job_type": job.job_type, "duration_ms": duration_ms,
-                                "attempt": job.attempts}),
-                 Jsonb({"job_id": job.id}), Jsonb(result_ref)),
+                (
+                    job.id,
+                    Jsonb(
+                        {
+                            "job_type": job.job_type,
+                            "duration_ms": duration_ms,
+                            "attempt": job.attempts,
+                        }
+                    ),
+                    Jsonb({"job_id": job.id}),
+                    Jsonb(result_ref),
+                ),
             )
     return True
 
@@ -177,16 +192,25 @@ def fail(
                                    run_after = now() + make_interval(secs => %s),
                                    error_class = %s, error_detail = %s
                     WHERE id = %s AND status = 'running' AND claimed_by = %s""",
-                (backoff_seconds(job.attempts, retry_base_s), error_class, error_detail[:500],
-                 job.id, worker_id),
+                (
+                    backoff_seconds(job.attempts, retry_base_s),
+                    error_class,
+                    error_detail[:500],
+                    job.id,
+                    worker_id,
+                ),
             )
         if cur.rowcount != 1:
             return "lost"
         cur.execute(
             "SELECT ledger_emit('job', %s, %s, %s)",
-            (job.id, "job.failed" if terminal else "job.retry_scheduled",
-             Jsonb({"job_type": job.job_type, "attempt": job.attempts,
-                    "error_class": error_class})),
+            (
+                job.id,
+                "job.failed" if terminal else "job.retry_scheduled",
+                Jsonb(
+                    {"job_type": job.job_type, "attempt": job.attempts, "error_class": error_class}
+                ),
+            ),
         )
     return "failed" if terminal else "pending"
 
@@ -217,8 +241,11 @@ def reap_expired(conn: psycopg.Connection) -> list[ReapedJob]:
         for row in rows:
             cur.execute(
                 "SELECT ledger_emit('job', %s, %s, %s)",
-                (str(row["id"]), "job.lease_expired",
-                 Jsonb({"job_type": row["job_type"], "new_status": row["status"]})),
+                (
+                    str(row["id"]),
+                    "job.lease_expired",
+                    Jsonb({"job_type": row["job_type"], "new_status": row["status"]}),
+                ),
             )
     return [ReapedJob(str(r["id"]), r["job_type"], r["status"]) for r in rows]
 

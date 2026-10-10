@@ -33,7 +33,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S311"]
+"tests/**" = ["S105", "S106", "S311", "E501", "RUF012"]  # long SQL literals read better unwrapped
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

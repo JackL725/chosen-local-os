@@ -20,7 +20,9 @@ def test_flag_is_required():
 def test_refuses_callers_off_the_allowlist():
     assert __name__ not in cloud_llm.ALLOWED_CALLERS
     with pytest.raises(CallerNotAllowed):
-        cloud_llm.complete(contains_prospect_data=False, system="s", prompt="p", prompt_version="v1")
+        cloud_llm.complete(
+            contains_prospect_data=False, system="s", prompt="p", prompt_version="v1"
+        )
 
 
 def test_allowlist_is_empty_in_phase_0():

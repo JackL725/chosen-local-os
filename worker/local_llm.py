@@ -161,7 +161,11 @@ class LocalLLM:
                 )
             log.warning(
                 "local model output failed validation",
-                extra={"model": self.model_name, "prompt_version": prompt_version, "attempt": attempt},
+                extra={
+                    "model": self.model_name,
+                    "prompt_version": prompt_version,
+                    "attempt": attempt,
+                },
             )
             if attempt == 1:
                 # One retry, telling the model what was wrong (structure only, no data).

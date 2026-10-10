@@ -14,8 +14,12 @@ from worker.slack import SlackWebhook
 def main() -> int:
     logs.configure()
     settings = get_settings()
-    llm = LocalLLM(settings.local_llm_base_url, settings.local_llm_model,
-                   thinking=settings.local_llm_thinking, timeout_s=settings.local_llm_timeout_s)
+    llm = LocalLLM(
+        settings.local_llm_base_url,
+        settings.local_llm_model,
+        thinking=settings.local_llm_thinking,
+        timeout_s=settings.local_llm_timeout_s,
+    )
     worker = Worker(settings, llm, SlackWebhook(settings.slack_alert_webhook_url))
     worker.install_signal_handlers()
     try:

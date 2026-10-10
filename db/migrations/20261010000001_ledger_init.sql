@@ -860,8 +860,8 @@ DECLARE
   spec jsonb := '{
     "actors":                 ["id"],
     "need_states":            ["key"],
-    "jobs":                   ["id"],
-    "approvals":              ["id"],
+    "jobs":                   ["id", "payload", "result_ref", "error_detail"],
+    "approvals":              ["id", "decision_note"],
     "ads":                    ["id"],
     "ad_daily":               ["id"],
     "leads":                  ["id", "first_name", "phone_e164", "email", "intake_note"],
@@ -872,13 +872,13 @@ DECLARE
     "safety_flags":           ["id", "span_ref"],
     "coaches":                ["id", "legal_name", "email", "phone"],
     "coach_need_states":      ["id"],
-    "vetting_items":          ["id", "notes"],
+    "vetting_items":          ["id", "notes", "evidence_location"],
     "matches":                ["id", "override_reason"],
     "match_candidates":       ["id", "reasons"],
     "fit_calls":              ["id"],
     "outcomes":               ["id"],
     "commissions":            ["id"],
-    "commission_adjustments": ["id"],
+    "commission_adjustments": ["id", "reason"],
     "templates":              ["id"],
     "outbound_messages":      ["id"]
   }';
@@ -929,7 +929,14 @@ BEGIN
 END $$;
 
 -- What the stale-job alert reads. IDs and numbers only.
-CREATE FUNCTION api.queue_health(p_threshold_hours numeric)
+-- should_alert is true on the check that first finds the queue stale, then once
+-- every p_repeat_minutes while it stays stale (so a workstation that is off
+-- overnight produces a few alerts, not one every check).
+CREATE FUNCTION api.queue_health(
+  p_threshold_hours  numeric,
+  p_check_every_min  integer DEFAULT 15,
+  p_repeat_minutes   integer DEFAULT 240
+)
 RETURNS TABLE (
   oldest_pending_job_id     uuid,
   oldest_pending_job_type   text,
@@ -938,25 +945,30 @@ RETURNS TABLE (
   failed_last_24h           integer,
   newest_heartbeat_age_min  integer,
   is_stale                  boolean,
-  workers_silent            boolean
+  should_alert              boolean
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   WITH oldest AS (
-    SELECT id, job_type, run_after FROM jobs
+    SELECT id, job_type, run_after,
+           (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
+      FROM jobs
      WHERE status = 'pending' AND run_after <= now()
      ORDER BY run_after LIMIT 1
   ), hb AS (
     SELECT max(last_seen_at) AS last_seen FROM worker_heartbeats
+  ), s AS (
+    SELECT o.*, hb.last_seen, (p_threshold_hours * 60)::integer AS threshold_min
+      FROM hb LEFT JOIN oldest o ON true
   )
-  SELECT o.id, o.job_type,
-         (extract(epoch FROM now() - o.run_after) / 60)::integer,
+  SELECT s.id, s.job_type, s.age_min,
          (SELECT count(*) FROM jobs WHERE status = 'pending')::integer,
          (SELECT count(*) FROM jobs WHERE status = 'failed' AND finished_at > now() - interval '24 hours')::integer,
-         (extract(epoch FROM now() - hb.last_seen) / 60)::integer,
-         coalesce(o.run_after < now() - make_interval(secs => p_threshold_hours * 3600), false),
-         o.id IS NOT NULL AND (hb.last_seen IS NULL
-                               OR hb.last_seen < now() - make_interval(secs => p_threshold_hours * 3600))
-    FROM hb LEFT JOIN oldest o ON true
+         (extract(epoch FROM now() - s.last_seen) / 60)::integer,
+         coalesce(s.age_min >= s.threshold_min, false),
+         coalesce(s.age_min >= s.threshold_min
+                  AND (s.age_min - s.threshold_min) % greatest(p_repeat_minutes, 1) < p_check_every_min,
+                  false)
+    FROM s
 $$;
 
 -- Error branch of every n8n workflow: an event with IDs only, never payload data.

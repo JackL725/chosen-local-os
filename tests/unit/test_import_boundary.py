@@ -24,11 +24,33 @@ from worker import cloud_llm
 ROOT = Path(__file__).resolve().parents[2]
 CODE_DIRS = ("worker", "review", "evals", "scripts")
 CLOUD_MODULE = "worker.cloud_llm"
-CLOUD_SDKS = ("anthropic", "openai", "google.generativeai", "google.genai", "vertexai",
-              "cohere", "mistralai", "groq", "together", "litellm", "boto3", "langchain")
-CLOUD_HOSTS = ("api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com",
-               "aiplatform.googleapis.com", "api.mistral.ai", "api.groq.com", "openrouter.ai",
-               "api.together.xyz", "api.cohere.ai", "api.cohere.com", "bedrock-runtime")
+CLOUD_SDKS = (
+    "anthropic",
+    "openai",
+    "google.generativeai",
+    "google.genai",
+    "vertexai",
+    "cohere",
+    "mistralai",
+    "groq",
+    "together",
+    "litellm",
+    "boto3",
+    "langchain",
+)
+CLOUD_HOSTS = (
+    "api.anthropic.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "aiplatform.googleapis.com",
+    "api.mistral.ai",
+    "api.groq.com",
+    "openrouter.ai",
+    "api.together.xyz",
+    "api.cohere.ai",
+    "api.cohere.com",
+    "bedrock-runtime",
+)
 HTTP_CLIENTS = ("httpx", "requests", "urllib.request", "http.client", "aiohttp", "urllib3")
 # local_llm: the local model server (base URL checked to be 127.0.0.1).
 # slack: incoming webhook alerts, IDs only. cloud_llm: the boundary itself.
@@ -76,8 +98,12 @@ def scan(root: Path, dirs: tuple[str, ...]) -> dict[str, Module]:
                     # importlib.import_module("x") / __import__("x") with a literal name
                     fn = node.func
                     fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-                    if fname in ("import_module", "__import__") and node.args and \
-                            isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    if (
+                        fname in ("import_module", "__import__")
+                        and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)
+                    ):
                         mod.imports.add(node.args[0].value)
                 elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                     mod.strings.append(node.value)
@@ -151,11 +177,17 @@ def test_checker_catches_planted_violations(tmp_path: Path):
     _write(tmp_path, "worker/jobs/__init__.py", "")
     _write(tmp_path, "worker/jobs/calls.py", "from worker.helper import x\n")  # transitive
     _write(tmp_path, "worker/jobs/rel.py", "from .. import cloud_llm\n")  # relative
-    _write(tmp_path, "worker/jobs/lazy.py",
-           "import importlib\nimportlib.import_module('worker.cloud_llm')\n")
+    _write(
+        tmp_path,
+        "worker/jobs/lazy.py",
+        "import importlib\nimportlib.import_module('worker.cloud_llm')\n",
+    )
     _write(tmp_path, "worker/sneaky.py", "import openai\n")
-    _write(tmp_path, "worker/direct_http.py",
-           "import httpx\nURL = 'https://api.openai.com/v1/chat/completions'\n")
+    _write(
+        tmp_path,
+        "worker/direct_http.py",
+        "import httpx\nURL = 'https://api.openai.com/v1/chat/completions'\n",
+    )
     _write(tmp_path, "worker/fine.py", "import json\n")
     modules = scan(tmp_path, ("worker",))
     found = "\n".join(violations(modules, frozenset()))
