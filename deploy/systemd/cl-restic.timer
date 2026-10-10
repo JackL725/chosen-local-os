@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly backup of private data
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 America/Denver
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

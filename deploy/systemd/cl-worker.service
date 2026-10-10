@@ -1,0 +1,25 @@
+[Unit]
+Description=Chosen Local: job worker
+Wants=network-online.target
+After=network-online.target llama-server.service
+OnFailure=cl-unit-failed@%n.service
+
+[Service]
+User=clworker
+Group=clworker
+WorkingDirectory=/opt/chosen-local
+EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
+EnvironmentFile=-/opt/chosen-local/REVISION.env
+ExecStart=/opt/chosen-local/.venv/bin/python -m worker
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=120
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/clworker/cl-private
+
+[Install]
+WantedBy=multi-user.target

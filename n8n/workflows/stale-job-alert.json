@@ -1,0 +1,89 @@
+{
+  "name": "stale-job-alert",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Threshold: 4 hours. PLACEHOLDER until docs/decisions.md item 24 is DONE; change the first argument.\nSELECT oldest_pending_job_id, oldest_pending_job_type, oldest_pending_age_min, pending_count, newest_heartbeat_age_min\n  FROM api.queue_health(4, 15, 240)\n WHERE should_alert;",
+        "options": {}
+      },
+      "name": "Ledger queue health",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "cl-alerts",
+          "mode": "name"
+        },
+        "text": "=:hourglass_flowing_sand: queue stale | oldest job {{ $json.oldest_pending_job_id }} | type {{ $json.oldest_pending_job_type }} | waiting {{ $json.oldest_pending_age_min }} min | pending {{ $json.pending_count }} | last worker heartbeat {{ $json.newest_heartbeat_age_min ?? 'never' }} min ago",
+        "otherOptions": {}
+      },
+      "name": "Alert Slack (IDs only)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Ledger queue health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ledger queue health": {
+      "main": [
+        [
+          {
+            "node": "Alert Slack (IDs only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "active": false,
+  "tags": []
+}

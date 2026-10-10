@@ -1,0 +1,23 @@
+# Review console: binds 127.0.0.1:8090 inside WSL. Windows sees it on localhost, and
+# Tailscale on Windows publishes it to the founders' devices on port 8443.
+[Unit]
+Description=Chosen Local: review console
+After=network.target
+OnFailure=cl-unit-failed@%n.service
+
+[Service]
+User=clworker
+Group=clworker
+WorkingDirectory=/opt/chosen-local
+EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
+ExecStart=/opt/chosen-local/.venv/bin/python -m review
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/clworker/cl-private
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,82 @@
+{
+  "name": "error-handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT api.record_workflow_error($1, $2, $3, $4) AS event_id;",
+        "options": {
+          "queryReplacement": "={{ [$json.workflow.name, String($json.execution.id), $json.execution.lastNodeExecuted || '', ($json.execution.error && $json.execution.error.name) || 'Error'] }}"
+        }
+      },
+      "name": "Write failed event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "cl-alerts",
+          "mode": "name"
+        },
+        "text": "=:rotating_light: n8n workflow failed | {{ $('On workflow error').item.json.workflow.name }} | execution {{ $('On workflow error').item.json.execution.id }} | node {{ $('On workflow error').item.json.execution.lastNodeExecuted }} | event {{ $json.event_id }}",
+        "otherOptions": {}
+      },
+      "name": "Alert Slack (IDs only)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Write failed event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write failed event": {
+      "main": [
+        [
+          {
+            "node": "Alert Slack (IDs only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "active": false,
+  "tags": []
+}

@@ -1,0 +1,31 @@
+# Public entry point: only n8n's webhook and form paths. Everything else is 404.
+# The n8n editor is NOT here; it is reachable over Tailscale only.
+# TLS is automatic (Let's Encrypt) once DNS for N8N_PUBLIC_HOST points at the VPS.
+{
+	admin off
+}
+
+{$N8N_PUBLIC_HOST} {
+	@n8n path /webhook/* /webhook-waiting/* /form/* /form-waiting/*
+	handle @n8n {
+		rate_limit {
+			zone per_ip {
+				key {remote_host}
+				events 60
+				window 1m
+			}
+		}
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy n8n:5678
+	}
+	handle {
+		respond 404
+	}
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+	# No access log: request paths and query strings can carry form data.
+}

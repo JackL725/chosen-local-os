@@ -1,0 +1,36 @@
+# llama.cpp model server: 127.0.0.1 only. Flags checked against
+# github.com/ggml-org/llama.cpp tools/server/README.md on 2026-10-10:
+#   --no-slots       turns off the /slots endpoint (on by default)
+#   /metrics         is off by default (no --metrics flag here)
+#   --no-webui       no built-in chat UI
+#   --log-verbosity 2  warnings and errors only; prompts are never logged
+#                    (--log-prompts-dir is off by default and not set here)
+#   --chat-template-kwargs  Qwen thinking off unless a request turns it on
+[Unit]
+Description=Chosen Local: llama.cpp model server
+After=network.target
+ConditionPathExists=/opt/llama.cpp/build/bin/llama-server
+OnFailure=cl-unit-failed@%n.service
+
+[Service]
+User=clworker
+Group=clworker
+EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
+    --model ${LLAMA_MODEL_PATH} \
+    --alias ${LOCAL_LLM_MODEL} \
+    --host 127.0.0.1 --port 8080 \
+    --ctx-size ${LLAMA_CTX_SIZE} --parallel ${LLAMA_PARALLEL} \
+    --n-gpu-layers all \
+    --jinja --chat-template-kwargs '{"enable_thinking":false}' \
+    --no-slots --no-webui \
+    --log-verbosity 2
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

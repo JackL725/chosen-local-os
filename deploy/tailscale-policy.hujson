@@ -1,0 +1,32 @@
+// Tailscale policy for Chosen Local. Paste into the admin console:
+// https://login.tailscale.com/admin/acls  (merge with anything already there).
+//
+//   tag:ledger       the VPS: Postgres on 5432, n8n editor on 8443 (tailscale serve)
+//   tag:workstation  the Windows workstation: review console on 8443 (tailscale serve)
+//
+// Replace the two founder logins below. Decisions item 23 (which founder devices) is
+// open; until it is done, every device a founder signs into Tailscale gets console access.
+{
+  "groups": {
+    "group:founders": ["JACK_TAILSCALE_LOGIN", "SAM_TAILSCALE_LOGIN"],
+    "group:admins":   ["JACK_TAILSCALE_LOGIN"],
+  },
+  "tagOwners": {
+    "tag:ledger":      ["group:admins"],
+    "tag:workstation": ["group:admins"],
+  },
+  "grants": [
+    // Only the workstation reaches the Ledger's Postgres.
+    {"src": ["tag:workstation"], "dst": ["tag:ledger"], "ip": ["tcp:5432"]},
+    // Founders' devices reach the review console and the n8n editor.
+    {"src": ["group:founders"], "dst": ["tag:workstation"], "ip": ["tcp:8443"]},
+    {"src": ["group:founders"], "dst": ["tag:ledger"], "ip": ["tcp:8443"]},
+    // Jack administers the VPS over SSH on the tailnet.
+    {"src": ["group:admins"], "dst": ["tag:ledger"], "ip": ["tcp:22"]},
+  ],
+  "tests": [
+    {"src": "tag:workstation", "accept": ["tag:ledger:5432"], "deny": ["tag:ledger:22"]},
+    {"src": "SAM_TAILSCALE_LOGIN", "accept": ["tag:workstation:8443", "tag:ledger:8443"],
+     "deny": ["tag:ledger:5432", "tag:ledger:22"]},
+  ],
+}

@@ -1,0 +1,9 @@
+# Posts "<unit> failed on <host>" to Slack when a Chosen Local unit fails. Unit name only.
+[Unit]
+Description=Chosen Local: alert that %i failed
+
+[Service]
+Type=oneshot
+User=clworker
+EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
+ExecStart=/opt/chosen-local/scripts/unit_failed_alert.sh %i

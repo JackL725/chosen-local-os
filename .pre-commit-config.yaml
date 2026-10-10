@@ -1,0 +1,34 @@
+# Jack installs the hook once, from the repo root:  uv run pre-commit install
+# (Claude Code's sandbox cannot write to .git/hooks.)
+# Local hooks run the project's own pinned tools through uv, so nothing is fetched here.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check --force-exclude
+        language: system
+        types: [python]
+      - id: n8n-send-gate
+        name: n8n workflows use send-gate, no credentials
+        entry: uv run python scripts/check_n8n_workflows.py
+        language: system
+        files: ^n8n/workflows/.*\.json$
+        pass_filenames: false
+      - id: no-secrets-in-env-examples
+        name: env examples hold names only
+        entry: uv run python scripts/check_env_examples.py
+        language: system
+        files: (^\.env\.example$|worker\.env\.example$)
+        pass_filenames: false
+      - id: pytest
+        name: pytest (unit; DB tests run when TEST_DATABASE_URL is set)
+        entry: uv run pytest -q -x
+        language: system
+        pass_filenames: false
+        types: [python]

@@ -1,0 +1,5 @@
+{"id": "hc-01", "input": {"nonce": "abc123"}, "expected": {"ok": true, "echo": "abc123"}}
+{"id": "hc-02", "input": {"nonce": "Zq81kP03"}, "expected": {"ok": true, "echo": "Zq81kP03"}}
+{"id": "hc-03", "input": {"nonce": "Phase0Check42"}, "expected": {"ok": true, "echo": "Phase0Check42"}}
+{"id": "hc-04", "input": {"nonce": "x9y8z7w6"}, "expected": {"ok": true, "echo": "x9y8z7w6"}}
+{"id": "hc-05", "input": {"nonce": "Nonce0042"}, "expected": {"ok": true, "echo": "Nonce0042"}}

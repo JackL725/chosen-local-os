@@ -1,0 +1,9 @@
+[Unit]
+Description=Chosen Local: encrypted backup of the Ledger and n8n databases
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/chosen-local-vps/deploy/backup/pg_backup.sh
+Nice=10
