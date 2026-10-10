@@ -1,0 +1,10 @@
+{
+  "_comment": "Invented data. Tests push these through the worker and fail if any appears in logs, error records, events or Slack payloads.",
+  "names": ["Dorian Quillfeather", "Marcus Ashgrove-Telluride"],
+  "phones": ["+17205550147", "(720) 555-0199"],
+  "emails": ["dorian.quillfeather@example.com"],
+  "transcript_sentences": [
+    "Honestly my marriage has been falling apart since the layoff in March.",
+    "I can put about nine hundred a month toward this if it actually works."
+  ]
+}
