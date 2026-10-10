@@ -44,6 +44,8 @@ def db_url() -> Iterator[str]:
     """A freshly migrated test database. Yields its URL."""
     url = _test_db_url()
     if url is None:
+        if os.environ.get("CI"):
+            pytest.fail("TEST_DATABASE_URL must be set in CI; database tests may not be skipped")
         pytest.skip("TEST_DATABASE_URL not set")
     import psycopg
 
