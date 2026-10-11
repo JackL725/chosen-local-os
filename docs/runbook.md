@@ -99,7 +99,7 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
 - **Restart:** `$DC restart postgres` (n8n reconnects; the worker retries with backoff).
 - **Migrate:** `sudo /opt/chosen-local-vps/deploy/migrate.sh` after `git pull`.
 - **Reboot behaviour:** containers `restart: unless-stopped`; `tailscale serve` config
-  persists. Reboot test result: _not yet run_ (deploy/README.md V9 — record the date here).
+  persists. Reboot test result: _passed 2026-10-10_ (deploy/README.md V9 — record the date here).
 
 ## Backups and restore tests
 
@@ -120,7 +120,7 @@ sudo rm /root/ledger-restore.dump
 ```
 
 Pass: the count matches the live Ledger's (or is a little lower: anything since 03:30).
-Last run: _not yet run_.
+Last run: _passed 2026-10-10_.
 
 **Private-data restore test (workstation, as clworker):**
 
@@ -131,7 +131,7 @@ sudo -u clworker bash -c 'diff -rq /home/clworker/cl-private /home/clworker/rest
 sudo rm -rf /home/clworker/restore-test
 ```
 
-Last run: _not yet run_.
+Last run: _passed 2026-10-10_.
 
 **Full Ledger loss:** stand up a new VPS with deploy/README.md V1–V5 (do not run `migrate.sh`),
 restore the latest dump into the new `ledger` database with `pg_restore`, run
