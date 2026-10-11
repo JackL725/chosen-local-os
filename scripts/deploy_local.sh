@@ -64,7 +64,7 @@ if [ ! -d "$DEST" ]; then
 fi
 ln -sfn "$DEST" /opt/chosen-local.new && mv -T /opt/chosen-local.new /opt/chosen-local
 # Keep the five newest releases.
-ls -1dt "$RELEASES"/*/ 2>/dev/null | grep -v "/$SHORT/$" | tail -n +5 | xargs -r rm -rf
+   { ls -1dt "$RELEASES"/*/ 2>/dev/null | grep -v "/$SHORT/$" || true; } | tail -n +5 | xargs -r rm -rf
 
 # --- 4. units --------------------------------------------------------------------
 install -m 644 "$DEST"/deploy/systemd/*.service "$DEST"/deploy/systemd/*.timer /etc/systemd/system/
