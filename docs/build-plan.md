@@ -96,32 +96,48 @@ Design the schema, but cover at least these, each with `created_at`, `updated_at
 
 ## Phase 1: Supply and offer
 
-**Goal:** the coach side of the Ledger works, so recruiting and vetting run while the funnel is built.
+**Goal:** the coach side of the Ledger works, on a base that later AI systems plug into, so
+recruiting and vetting run while the funnel is built. Scope as decided on Oct 13, 2026; the
+design and its decisions are `docs/phase-1-design.md`, deploy steps `deploy/PHASE1.md`.
 
 ### Build
 
-1. **Coach operations, part 1 (system 7).**
-   - Recruiting research: given a coach's public website or profile text, summarize their offer,
-     price signals and need-state fit into a prospect-coach record. May use a cloud model; the
-     input is public coach information, never prospect data.
-   - Coach intake: a form or CSV import that creates `coaches` rows.
-   - Vetting-file assembly: a checklist view per coach in the review console showing the items,
-     their evidence and who verified each. Only a founder can mark an item verified or a coach
-     active. The system never does.
-   - Outreach drafts from the approved outreach template, sent for approval, then out through
-     `send-gate`.
-2. **Local model server under load:** 10 parallel draft jobs complete without errors.
+1. **Modular base.** Each AI system is a folder under `systems/` with a data-only manifest
+   (`docs/systems.md`), found by a registry, turned on or off by a founder, scaffolded with
+   `scripts/new_system.py`. Business rules (need-states, markets, settings, the vetting
+   standard) are data founders edit in the console. Markets (cities) are in the schema; another
+   business runs its own install seeded from a business profile.
+2. **Migration 2.** Systems registry, settings, markets, vetting standards as data, vetting
+   evidence, console users and sessions, and the guard that lets each database login act only
+   as its own actors.
+3. **Review console core.** Sign-in by Tailscale identity plus password, sessions, core screens.
+   Phase 2c adds the call screens on top.
+4. **Coaches system (system 7, part 1).** Roster, coach form and CSV import, the vetting file with
+   evidence, the status flow, the readiness view. No model.
+5. **Local model server under load:** 10 parallel jobs complete without errors.
+
+Recruiting research and outreach drafts are not in Phase 1; see "Later systems" below.
 
 ### Acceptance tests
 
 - A coach moves prospect → vetting → active only with founder actions recorded in `events`.
-- A coach with a missing vetting item cannot be marked active.
-- Outreach never sends without an approval record.
+- A coach with a missing required vetting item cannot be marked active.
+- Ten parallel jobs complete without errors on the workstation.
+- A scaffolded system runs its job and evals with no edit to `worker/` or `review/`.
+- The worker's database login cannot act as a founder.
+- The full list is in `docs/phase-1-design.md` section 8 and `deploy/PHASE1.md` section A.
 
-### Kickoff prompt
+### Gate (the plan's gate)
 
-> Read the Phase 1 section of docs/build-plan.md and sections 7 and 9 of the business plan. Check
-> docs/decisions.md for items 1 to 5. Plan Phase 1 and list anything you need from me.
+Two coaches per launch need-state, each with a complete vetting file and a signed agreement.
+Phase 2 build work starts once the acceptance tests pass; it does not wait for the gate.
+
+### Later systems (each a folder under `systems/`, built when needed)
+
+- **Coach research:** a coach's public page or pasted profile text → a prospect-coach record. May
+  use a cloud model (public information only, data class `public`).
+- **Coach outreach:** drafts from the approved outreach template (decisions item 5), approved in
+  the console, sent through `send-gate` once 2a exists.
 
 ---
 
@@ -171,8 +187,8 @@ appears in Slack, n8n execution data or logs.
 
 ### 2c. Call system and review console (system 4)
 
-- **Review console:** a small web app run by the worker host as `clworker`, served only over
-  Tailscale to the founders' devices, with a login. Shows extractions beside their source passages,
+- **Review console:** the console core from Phase 1 (sign-in, sessions, the systems contract) gets
+  the call screens, as a `calls` system under `systems/`. Shows extractions beside their source passages,
   safety flags, pre-call briefs and drafts with call content. Founders correct and approve there.
 - **Before the call:** a one-page brief from intake data, attached to the Close lead and shown in
   the console 15 minutes before the booked time; Slack gets a link.

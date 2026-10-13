@@ -1,5 +1,5 @@
 ---
-paths: worker/**, evals/**, scripts/**, tests/**, review/**
+paths: worker/**, evals/**, scripts/**, tests/**, review/**, systems/**
 ---
 
 # Worker rules
@@ -7,8 +7,9 @@ paths: worker/**, evals/**, scripts/**, tests/**, review/**
 - Every job handler is a pure function of (job payload, config, clients) plus explicit writes. Inject
   the database, model and Close clients so tests can replace them with fakes.
 - `worker/cloud_llm.py` is reachable only from an explicit allowlist of modules (coach research,
-  ad-script drafting from founder-written briefs). A test walks every module's imports, including
-  transitive ones, and fails if any module outside the allowlist imports `cloud_llm`, or if any
+  ad-script drafting from founder-written briefs), named as `systems.<key>.<module>`. A test walks
+  every module's imports, including transitive ones, and fails if any module outside the
+  allowlist imports `cloud_llm`, or if any
   module other than `cloud_llm` imports a cloud SDK (`anthropic`, `openai` pointed at a non-local
   URL) or calls a non-local model endpoint with `httpx`/`requests`.
 - `cloud_llm` refuses every call that does not pass `contains_prospect_data=False` explicitly.

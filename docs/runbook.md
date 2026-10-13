@@ -51,7 +51,11 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
 ## Worker (`cl-worker`)
 
 - **Start / stop / restart:** `sudo systemctl start|stop|restart cl-worker`. Stop sends SIGTERM:
-  the current job finishes, then the process exits (up to 120 s).
+  each slot finishes its current job, then the process exits (up to 120 s).
+- **Slots:** `WORKER_CONCURRENCY` jobs run at once (4, matching `LLAMA_PARALLEL`). Each slot has
+  its own worker ID (`<host>-<pid>-s<n>`) and heartbeat row.
+- **A job waits and never runs:** its system may be turned off (console → Systems). Jobs whose
+  type no system declares are claimed and fail with `UnknownJobType`, so typos alert.
 - **Deploy a new commit:** commit, then `sudo scripts/deploy_local.sh` from the checkout. It
   installs `/opt/chosen-local-releases/<sha>`, repoints `/opt/chosen-local`, and restarts.
 - **Roll back:** `sudo ln -sfn /opt/chosen-local-releases/<older sha> /opt/chosen-local && sudo systemctl restart cl-worker cl-review`.
@@ -76,10 +80,64 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
 
 ## Review console (`cl-review`)
 
-- Phase 0 placeholder: `/healthz` only. Restart with `sudo systemctl restart cl-review`.
-- **Not reachable from a phone:** Windows tray → Tailscale connected and "Run unattended" on;
-  in admin PowerShell `tailscale serve status` shows `:8443 → http://127.0.0.1:8090`; in WSL
-  `curl 127.0.0.1:8090/healthz` works.
+- **Where:** `https://<workstation tailnet name>:8443` from a founder device (Tailscale Serve on
+  Windows → `127.0.0.1:8090` in WSL); `http://localhost:8090` on the workstation itself (Jack only:
+  his login has `--allow-local` and `CONSOLE_ALLOW_LOCAL_SIGNIN=true` is in `worker.env`).
+- **Start / stop / restart:** `sudo systemctl restart cl-review`. **Health:** `curl -s 127.0.0.1:8090/healthz`.
+- **Logs:** `journalctl -u cl-review -n 50 --no-pager`. Requests are never logged; you will see
+  start-up, sign-in outcomes (no names) and error classes.
+- **Founder logins** (run as clworker; passwords are typed at a prompt):
+  ```bash
+  A="sudo -u clworker /opt/chosen-local/scripts/console_admin.sh"
+  $A list
+  $A create-user sam --tailscale-login <login>     # also resets an existing login
+  $A set-password sam                              # signs out all of Sam's sessions
+  $A unlock sam                                    # after too many wrong passwords
+  $A sign-out-everywhere sam                       # a lost phone
+  ```
+- **Locked out:** after five wrong passwords (setting `console.max_failed_signins`) the account
+  locks for 15 minutes and Slack gets `console_signin_locked | console_user <id>`. Wait, or `unlock`.
+- **"Your session has ended":** sessions end after 12 idle hours (`console.session_idle_hours`), on
+  sign-out, on a password change, or if the Tailscale identity changes. Sign in again.
+- **"The Ledger refused that: …":** a database rule said no (for example, activating a coach
+  under a draft standard). The message is the rule; nothing was saved.
+- **Database login:** the console uses `cl_console` (`CONSOLE_DATABASE_URL`), the only login that
+  may act as a founder. Rotate it with `deploy/postgres/create_console_login.sh` on the VPS, update
+  `worker.env`, restart `cl-review`.
+
+## Systems, settings and rules
+
+- **Turn a system on or off:** console → Systems. Off pauses it: its jobs wait (counted as
+  "paused" by the stale-job alert, never alerted on) and run when it is turned back on.
+  Required systems cannot be turned off. New systems arrive off after a deploy.
+- **Settings** (stale-job threshold, console timeouts, coaches needed per need-state): console →
+  Settings. Every change is an event with the founder's name.
+- **Need-states and markets:** console → Need-states / Markets. With one active market, new coaches
+  and leads join it automatically; with two or more, each must name one.
+- **Re-seed from the business profile** (safe; only adds what is missing): on the VPS,
+  `python3 -m worker.bootstrap deploy/business/chosen-local.toml | $DC exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d ledger`.
+  Note it deactivates any active founder the profile does not list.
+
+## Coaches and vetting evidence
+
+- **Vetting standards:** Coaches → Vetting standards. Edit a draft, then Activate (founder only;
+  retires the previous one). Coaches already active keep the standard they were vetted under; a
+  coach still in vetting stays on its standard until a founder moves it.
+- **Evidence files** live on the workstation in `/home/clworker/cl-private/coaches/<coach>/<item>/`
+  with random names; the Ledger holds the path, SHA-256 and size. They are in the nightly restic
+  backup with the rest of `cl-private`.
+- **A file shows "not available on this workstation":** restore it from restic:
+  ```bash
+  sudo -u clworker bash -c 'set -a; . ~/.config/chosen-local/restic.env; restic restore latest --tag cl-private --target /home/clworker/restore --include "/home/clworker/cl-private/coaches/<coach id>"'
+  ```
+  then move the files back into `cl-private/coaches/` and check the SHA-256 against the Ledger
+  (`SELECT relative_path, sha256 FROM vetting_evidence WHERE id = '<id>'`).
+
+## Load check (Phase 1 acceptance A2)
+
+With llama-server up and a worker running with `WORKER_CONCURRENCY=4`:
+`uv run python scripts/load_check.py --jobs 10`. It prints aggregate numbers only and
+`result=PASS` when all ten succeed. Health check must be turned on in that Ledger.
 
 ## WSL itself
 

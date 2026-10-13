@@ -30,10 +30,23 @@ events and payload fields, auth method, rate limits, with links and the date che
 | dbmate | v2.36.0 (2026-09-19). Binary: `https://github.com/amacneil/dbmate/releases/download/v2.36.0/dbmate-linux-amd64`. Reads `DATABASE_URL`; files need `-- migrate:up` and `-- migrate:down`; `--no-dump-schema`; `--wait`; default dir `./db/migrations`. | https://github.com/amacneil/dbmate | 2026-10-10 |
 | restic + B2 | Backblaze recommends its S3-compatible API for restic: `RESTIC_REPOSITORY=s3:https://<endpoint>/<bucket>/<path>` with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`; `RESTIC_PASSWORD_FILE`. `forget --keep-daily/--keep-weekly/--keep-monthly --prune`; `restore latest --target`. | https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html ; https://restic.readthedocs.io/en/stable/060_forget.html ; https://restic.readthedocs.io/en/stable/050_restore.html | 2026-10-10 |
 
+## Confirmed for Phase 1
+
+| Component | Confirmed | Source | Checked |
+| --- | --- | --- | --- |
+| Tailscale Serve identity headers | Serve adds `Tailscale-User-Login`, `Tailscale-User-Name`, `Tailscale-User-Profile-Pic` to proxied requests and strips copies sent by the client. Not populated for traffic from tagged devices or through Funnel. The backend should listen on localhost only, since anything that reaches it directly can set the headers. | https://tailscale.com/kb/1312/serve | 2026-10-13 |
+| Starlette 1.6.0 | `Jinja2Templates(env=...)`; `TemplateResponse(request, name, context, status_code=...)`; `Starlette(..., max_body_size=...)` adds a request body limit; `request.form(max_files, max_fields, max_part_size)` (part size applies to non-file fields; files spool to disk past 1 MB); `FileResponse(..., content_disposition_type=...)`. Read from the installed package source, not from memory. | https://github.com/encode/starlette (v1.6.0 source) | 2026-10-13 |
+| Python `hashlib.scrypt` | Standard library; the console passes `maxmem` explicitly so n=2^17, r=8 (about 128 MB) is allowed. Parameters n=2^17, r=8, p=1 are, to my knowledge, OWASP's minimum for scrypt; the cheat sheet page could not be opened in that session, so **re-check** https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html. Hashes carry their own parameters, so raising them later needs no migration. | https://docs.python.org/3/library/hashlib.html | 2026-10-13 (partly unverified) |
+| Postgres `pg_has_role` | Reports a superuser as having every role, so the login guard checks `rolsuper` first; it uses `USAGE` (inherited privileges) rather than `MEMBER`. Verified on Postgres 16.15. | local test, `tests/db/test_phase1_schema.py` | 2026-10-13 |
+
+Relative redirects only: the console never builds absolute URLs, because Tailscale Serve may
+rewrite the `Host` header. Not verified against a real Serve hop; acceptance step A3 exercises it.
+
 ## Model choices
 
 | Job | Chosen | Score on eval | Date |
 | --- | --- | --- | --- |
 | Language model | Qwen3.6 27B Q4_K_M (baseline) | healthcheck eval: not yet run on the workstation | |
+| Load check (Phase 1) | 10 healthcheck jobs, `WORKER_CONCURRENCY=4`, `LLAMA_PARALLEL=4` | not yet run: record `wall_s` and `job_ms_median` from `scripts/load_check.py` | |
 | Transcription | | | |
 | Diarization | pyannote speaker-diarization-community-1 | | |

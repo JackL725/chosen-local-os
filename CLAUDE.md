@@ -62,9 +62,16 @@ that conflicts with them, unless Jack changes the plan itself.
   `/opt/chosen-local`, never from this checkout, as systemd units reading
   `EnvironmentFile=/home/clworker/.config/chosen-local/worker.env`. The worker connects out to
   Postgres over Tailscale. No port at home is open to the internet.
-- **Review console**: a small web app on the workstation, served only over Tailscale to the
-  founders' devices. It is where founders see transcript passages, extractions, safety flags and
-  drafts that contain call content, correct them and approve them.
+- **Review console** (`review/`, Starlette): a small web app on the workstation, served only over
+  Tailscale to the founders' devices. It is where founders see transcript passages, extractions,
+  safety flags and drafts that contain call content, correct them and approve them. Founders sign
+  in with their Tailscale identity plus a password; every console write acts as that founder.
+- **Systems** (`systems/<key>/`): each AI system is a folder with a data-only manifest, found by the
+  registry in `systems/__init__.py`. Add one with `scripts/new_system.py`; the contract is in
+  `docs/systems.md` and `.claude/rules/systems.md`. A system never edits `worker/` or `review/`.
+- **Database logins act only as their own actors** (migration 2): the worker login only as system
+  actors, n8n only as `n8n`, the console login (`cl_console`) only as founders or
+  `review_console`. Never work around this, for example by giving the worker the console's login.
 - **Job queue**: a Postgres `jobs` table claimed with `FOR UPDATE SKIP LOCKED`. No Redis. n8n
   alerts Slack when the oldest pending job is older than the threshold in `docs/decisions.md`.
 - **Tools**: Close (calls, texts, pipeline; one seat), Slack (alerts and links), Cal.com (booking;
@@ -80,11 +87,14 @@ that conflicts with them, unless Jack changes the plan itself.
   `pytest` must pass before you report a task done.
 - Database schema as plain SQL migrations in `db/migrations/`, applied with `dbmate`. Never edit an
   applied migration; add a new one.
+- Business data (the business name, founders, markets, need-states) never appears in code; it
+  comes from the Ledger, seeded from `deploy/business/<profile>.toml`. A test enforces this.
 - n8n workflows exported as JSON into `n8n/workflows/`, one file per workflow, no credentials in
   exports. Keep logic in n8n thin: receive, write to the Ledger, enqueue, route, send through
   `send-gate`. Put anything with real logic in the worker where it can be tested.
 - Prompts live in `prompts/<system>/<name>.vN.md` with a header stating purpose, inputs and the
-  output schema. Changing a prompt means a new version file. Model output that becomes data is
+  output schema. Changing a prompt means a new version file; the version in use is set in the
+  system's manifest (`PromptSpec`). Model output that becomes data is
   validated against a Pydantic model; on failure retry once, then mark the job failed and alert.
 - Extracted fields store the transcript span they came from, a confidence, the prompt version
   and the model.
@@ -122,6 +132,11 @@ that conflicts with them, unless Jack changes the plan itself.
 - `uv run python -m worker` starts a dev worker against synthetic data.
 - `uv run python -m evals.run <system>` runs evals on synthetic data, on this machine (CI has no
   local model and runs unit tests with a fake model client).
+- `uv run python scripts/check_systems.py` checks every system against the contract (CI too).
+- `uv run python scripts/new_system.py <key> [--model] [--console] [--tables]` scaffolds a system.
+- `uv run python -m review` starts a dev console against `DATABASE_URL`.
+- `python3 -m worker.bootstrap deploy/business/<profile>.toml` prints the SQL that seeds a Ledger
+  from a business profile (`--apply` runs it on `DATABASE_URL`; dev only).
 - Jack only: `scripts/deploy_local.sh` installs the current commit into `/opt/chosen-local`, and
   `sudo -u clworker /opt/chosen-local/scripts/eval_private.sh <system>` prints aggregate scores
   on real data.

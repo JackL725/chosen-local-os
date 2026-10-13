@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     worker_reap_interval_s: float = 60.0
     worker_retry_base_s: float = 30.0
     worker_enable_test_jobs: bool = False
+    # Jobs run at once, one slot each (its own worker_id, connection and heartbeat).
+    # Match LLAMA_PARALLEL so every slot gets a model slot.
+    worker_concurrency: int = Field(default=1, ge=1, le=16)
     git_sha: str = ""
 
     @field_validator("local_llm_base_url")

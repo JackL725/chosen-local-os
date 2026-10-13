@@ -1,6 +1,6 @@
 # Phase 1 plan: coach supply on a modular base
 
-Oct 13, 2026 · v2, revised the same day before the build started
+Oct 13, 2026 · v2, revised before the build · built the same day (see "As built")
 
 Phase 1 builds the review console's core, the coach roster and vetting file, and a base that later
 AI systems plug into without touching the core. Recruiting research and outreach are deferred and
@@ -9,6 +9,37 @@ return later as plug-in systems.
 **Gate (unchanged):** two coaches per launch need-state, each with a complete vetting file and a
 signed agreement. The build can finish before the gate does; Phase 2 starts once the build's
 acceptance tests pass, while recruiting continues.
+
+---
+
+## As built (Oct 13)
+
+Built in five commits on `claude/phase-1` (1a to 1e), 170 tests passing, CI green. Where the
+build differs from the sections below, this list wins:
+
+- **Bootstrap** is `python3 -m worker.bootstrap <profile>`, not `systems.bootstrap`. It prints SQL
+  and uses the standard library only, so it runs on the VPS checkout and is piped into psql as
+  the owner (`deploy/PHASE1.md` V4).
+- **Vetting-standard screens** live in the coaches system (`/s/coaches/standards`), not in the
+  core Settings screen. The rules stay in the database (core).
+- **Unknown job types still fail loudly.** Only jobs of a system that is turned off wait; a job
+  type no system declares is claimed and fails with `UnknownJobType`, so a typo in an n8n
+  workflow alerts at once rather than after the stale-job threshold.
+- **One active market fills itself in.** With exactly one active market, `coaches`, `leads` and
+  `ads` may leave `market_key` out; with more, the Ledger requires it.
+- **Verifying an item needs evidence** of the kind its standard asks for (file, note or either).
+  The console shows "needs a file" until there is one. This is a workflow rule in the coaches
+  system, not a database rule.
+- **An active coach's file cannot be un-verified**; pause the coach first.
+- **The console login** is `cl_console`, created by `deploy/postgres/create_console_login.sh`
+  (rerunning `create_logins.sh` would rotate every login). `REVIEW_CONSOLE_SECRET` is gone;
+  sessions live in the Ledger.
+- **`uv.lock` was not regenerated** (no package index where it was built). Run `uv lock` before
+  deploying (`deploy/PHASE1.md` L2). CI resolves fresh each run, so it is unaffected.
+- **Local verification** ran on Python 3.13 with ruff 0.16.8 and a real Postgres 16.15; CI runs
+  the locked Python 3.12 toolchain and passed on every chunk.
+- **Not verified here:** anything on the workstation (the load check, Tailscale Serve in front of
+  the console, systemd restarts). Those are `deploy/PHASE1.md` section A.
 
 ---
 
@@ -131,7 +162,7 @@ checked by the contract test and again at worker start.
 
 - `markets` table; `coaches`, `leads` and `ads` get a required `market_key`. Need-state launch is
   per market. The readiness view and later reports group by market.
-- **One install per business.** `python -m systems.bootstrap <profile.toml>` seeds an empty Ledger
+- **One install per business.** `python3 -m worker.bootstrap <profile.toml>` seeds an empty Ledger
   from a business profile: name, markets, founders, need-states, the draft vetting standard.
   `deploy/business/chosen-local.toml` is Chosen Local's. It is idempotent, so it also runs on the
   existing production Ledger.
