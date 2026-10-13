@@ -27,6 +27,7 @@ from worker.jobs import JobContext, resolve
 from worker.local_llm import StructuredLLM
 from worker.logs import get_logger
 from worker.slack import AlertSink, format_job_failed
+from worker.system_sync import sync_systems
 
 log = get_logger(__name__)
 
@@ -66,6 +67,7 @@ class Worker:
         """Run until stopped. Returns the number of jobs processed."""
         self._stop.clear()
         conn = self._connect(self.settings.database_url)
+        sync_systems(conn)
         hb = threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True)
         hb.start()
         self._emit(conn, "worker.started")

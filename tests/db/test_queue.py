@@ -17,6 +17,14 @@ from worker.main import Worker
 pytestmark = pytest.mark.db
 
 
+@pytest.fixture(autouse=True)
+def _healthcheck_on(db_url):
+    """New systems arrive turned off; these tests run healthcheck jobs, so turn it on."""
+    from tests.conftest import enable_systems
+
+    enable_systems(db_url, "healthcheck")
+
+
 def _job_row(conn, job_id):
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
@@ -215,3 +223,52 @@ def test_full_synthetic_run_leaks_nothing(conn, db_url, settings_factory, sentin
     for where, text in haystacks.items():
         for s in every:
             assert s not in text, f"sentinel leaked into {where}"
+
+
+def test_jobs_of_a_paused_system_wait_then_run_when_it_is_turned_on(conn, db_url, settings_factory):
+    from worker.db import transaction
+
+    settings = settings_factory(database_url=db_url)
+    with transaction(conn, actor="sam"):
+        conn.execute("UPDATE systems SET enabled = false WHERE key = 'healthcheck'")
+    job_id = queue.enqueue(conn, "healthcheck", {"nonce": "paused01"})
+    Worker(settings, FakeLLM(), lambda _t: None).run(idle_exit=True)
+    assert _job_row(conn, job_id)["status"] == "pending"
+    health = conn.execute("SELECT * FROM api.queue_health()").fetchone()
+    conn.commit()
+    assert (health["pending_count"], health["paused_pending_count"]) == (0, 1)
+    assert health["oldest_pending_job_id"] is None
+
+    with transaction(conn, actor="sam"):
+        conn.execute("UPDATE systems SET enabled = true WHERE key = 'healthcheck'")
+    Worker(settings, FakeLLM(), lambda _t: None).run(idle_exit=True)
+    assert _job_row(conn, job_id)["status"] == "succeeded"
+
+
+def test_a_system_cannot_turn_itself_on(conn, db_url):
+    import psycopg
+
+    from worker.db import transaction
+
+    with transaction(conn, actor="sam"):
+        conn.execute("UPDATE systems SET enabled = false WHERE key = 'healthcheck'")
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="founder"):
+        with transaction(conn, actor="worker"):
+            conn.execute("UPDATE systems SET enabled = true WHERE key = 'healthcheck'")
+    conn.rollback()
+
+
+def test_registering_systems_again_writes_no_events(conn, db_url):
+    from worker.system_sync import sync_systems
+
+    def count():
+        n = conn.execute(
+            "SELECT count(*) AS n FROM events WHERE entity_type IN ('systems', 'system_job_types')"
+        ).fetchone()["n"]
+        conn.commit()
+        return n
+
+    before = count()
+    sync_systems(conn)
+    sync_systems(conn)
+    assert count() == before

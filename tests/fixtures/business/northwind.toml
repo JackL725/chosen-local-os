@@ -1,0 +1,33 @@
+# A made-up business, to prove nothing in the core depends on Chosen Local's data.
+[business]
+name = "Northwind Mentors"
+
+[[founders]]
+name = "ada"
+
+[[founders]]
+name = "lin"
+
+[[markets]]
+key = "portland"
+name = "Portland"
+time_zone = "America/Los_Angeles"
+
+[[need_states]]
+key = "career"
+label = "Career and leadership"
+launch_in = ["portland"]
+
+[vetting_standard]
+version = 1
+title = "Northwind standard"
+
+[[vetting_standard.items]]
+key = "interview"
+label = "Interview"
+evidence_kind = "note"
+
+[[vetting_standard.items]]
+key = "contract"
+label = "Signed contract"
+evidence_kind = "file"

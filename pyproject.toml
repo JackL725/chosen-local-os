@@ -33,7 +33,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S311", "E501", "RUF012"]  # long SQL literals read better unwrapped
+"tests/**" = ["S105", "S106", "S311", "S608", "E501", "RUF012"]  # long SQL literals read better unwrapped
+# The bootstrap prints SQL for psql on the VPS. Every value passes through _lit(), and
+# tests/db/test_phase1_schema.py::test_profile_text_is_quoted_safely covers it.
+"worker/bootstrap.py" = ["S608"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -209,7 +209,12 @@ def problems(root: Path = ROOT) -> list[str]:
     except (ImportError, TypeError, ValueError) as exc:
         return [f"registry: {exc}"]
     found: list[str] = []
+    from worker.business_settings import CORE_SETTINGS
+
+    core_keys = {s.key for s in CORE_SETTINGS}
     for key, manifest in manifests.items():
+        if key in {k.split(".")[0] for k in core_keys}:
+            found.append(f"{key}: that key is reserved for core settings")
         found += _check_manifest(manifest, root)
         found += _check_code(key, root / "systems" / key)
     return found

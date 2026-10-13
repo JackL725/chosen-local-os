@@ -128,7 +128,7 @@ def test_role_privileges(raw):
         "api.enqueue_job('healthcheck', '{}', NULL, NULL, 'key-1') AS b"
     ).fetchone()
     assert again["a"] == again["b"]
-    health = raw.execute("SELECT * FROM api.queue_health(4)").fetchone()
+    health = raw.execute("SELECT * FROM api.queue_health()").fetchone()
     assert health["pending_count"] == 2 and health["is_stale"] is False
     assert health["should_alert"] is False
     raw.execute("RESET ROLE")
@@ -165,8 +165,34 @@ ITEMS = [
 ]
 
 
+def _standard(raw, items=ITEMS, *, activate: bool = True) -> str:
+    """A vetting standard holding the given item keys, activated by a founder."""
+    as_actor(raw, "migration")
+    version = raw.execute(
+        "SELECT coalesce(max(version), 0) + 1 AS v FROM vetting_standards"
+    ).fetchone()["v"]
+    sid = raw.execute(
+        "INSERT INTO vetting_standards (version, title) VALUES (%s, 'Test standard') RETURNING id",
+        (version,),
+    ).fetchone()["id"]
+    for n, key in enumerate(items):
+        raw.execute(
+            """INSERT INTO vetting_item_types (standard_id, key, label, sort_order)
+               VALUES (%s, %s, %s, %s)""",
+            (sid, key, key.replace("_", " "), n),
+        )
+    if activate:
+        as_actor(raw, "jack")
+        raw.execute("UPDATE vetting_standards SET status = 'retired' WHERE status = 'active'")
+        raw.execute("UPDATE vetting_standards SET status = 'active' WHERE id = %s", (sid,))
+    return sid
+
+
 def test_coach_cannot_go_active_until_every_item_is_founder_verified(raw):
+    _standard(raw)
     coach = _coach(raw)
+    as_actor(raw, "worker")
+    raw.execute("UPDATE coaches SET status = 'vetting' WHERE id = %s", (coach,))
     as_actor(raw, "sam")
     for item in ITEMS[:-1]:
         raw.execute(
@@ -396,7 +422,7 @@ def test_queue_health_alerts_on_crossing_then_every_four_hours(raw, age_min, sta
         (age_min,),
     )
     raw.execute("SET ROLE ledger_n8n")
-    row = raw.execute("SELECT * FROM api.queue_health(4, 15, 240)").fetchone()
+    row = raw.execute("SELECT * FROM api.queue_health(15)").fetchone()  # 4 h default (item 24)
     raw.execute("RESET ROLE")
     assert (row["oldest_pending_age_min"], row["is_stale"], row["should_alert"]) == (
         age_min,

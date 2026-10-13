@@ -23,7 +23,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Threshold: 4 hours. PLACEHOLDER until docs/decisions.md item 24 is DONE; change the first argument.\nSELECT oldest_pending_job_id, oldest_pending_job_type, oldest_pending_age_min, pending_count, newest_heartbeat_age_min\n  FROM api.queue_health(4, 15, 240)\n WHERE should_alert;",
+        "query": "-- Threshold and repeat interval come from the Ledger's settings\n-- (core.stale_job_alert_hours, default 4 h, decisions item 24; editable in the console).\n-- The argument is how often this workflow runs, in minutes.\nSELECT oldest_pending_job_id, oldest_pending_job_type, oldest_pending_age_min, pending_count,\n       paused_pending_count, newest_heartbeat_age_min, threshold_hours\n  FROM api.queue_health(15)\n WHERE should_alert;",
         "options": {}
       },
       "name": "Ledger queue health",
@@ -42,7 +42,7 @@
           "value": "cl-alerts",
           "mode": "name"
         },
-        "text": "=:hourglass_flowing_sand: queue stale | oldest job {{ $json.oldest_pending_job_id }} | type {{ $json.oldest_pending_job_type }} | waiting {{ $json.oldest_pending_age_min }} min | pending {{ $json.pending_count }} | last worker heartbeat {{ $json.newest_heartbeat_age_min ?? 'never' }} min ago",
+        "text": "=:hourglass_flowing_sand: queue stale (over {{ $json.threshold_hours }} h) | oldest job {{ $json.oldest_pending_job_id }} | type {{ $json.oldest_pending_job_type }} | waiting {{ $json.oldest_pending_age_min }} min | pending {{ $json.pending_count }} | paused {{ $json.paused_pending_count }} | last worker heartbeat {{ $json.newest_heartbeat_age_min ?? 'never' }} min ago",
         "otherOptions": {}
       },
       "name": "Alert Slack (IDs only)",
