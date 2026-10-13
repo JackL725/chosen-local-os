@@ -5,7 +5,8 @@
 #
 # What it does, in order:
 #   1. refuses to run with uncommitted changes (production is always a commit);
-#   2. creates the `clworker` system user and its private folders if missing;
+#   2. creates the `clworker` and `clconsole` system users, the `clprivate` group they share,
+#      and the private folders, if missing; sets the folders' group access;
 #   3. exports HEAD into /opt/chosen-local-releases/<sha>, builds its virtualenv with
 #      the system Python 3.12, and points the /opt/chosen-local symlink at it;
 #   4. installs the systemd units and enables them at boot;
@@ -42,9 +43,23 @@ if ! id clworker >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /home/clworker --shell /usr/sbin/nologin clworker
   echo "Created system user clworker."
 fi
-install -d -o clworker -g clworker -m 700 /home/clworker
-install -d -o clworker -g clworker -m 700 /home/clworker/cl-private /home/clworker/cl-private/evals
+# The review console runs as its own user so the worker can never read its database login
+# (the only one that may act as a founder). The two share cl-private through clprivate.
+getent group clprivate >/dev/null || groupadd --system clprivate
+if ! id clconsole >/dev/null 2>&1; then
+  useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin clconsole
+  echo "Created system user clconsole."
+fi
+usermod -a -G clprivate clworker
+usermod -a -G clprivate clconsole
+# /home/clworker: clprivate may pass through it to cl-private, but not list it.
+install -d -o clworker -g clprivate -m 710 /home/clworker
+install -d -o clworker -g clprivate -m 2770 /home/clworker/cl-private /home/clworker/cl-private/evals
+chgrp -R clprivate /home/clworker/cl-private
+find /home/clworker/cl-private -type d -exec chmod 2770 {} +
+find /home/clworker/cl-private -type f -exec chmod g+rw,o-rwx {} +
 install -d -o clworker -g clworker -m 700 /home/clworker/.config /home/clworker/.config/chosen-local
+install -d -o root -g root -m 700 /etc/chosen-local
 
 # --- 3. release ------------------------------------------------------------------
 RELEASES=/opt/chosen-local-releases
@@ -81,15 +96,15 @@ if [ ! -f "$ENVFILE" ]; then
   exit 0
 fi
 chown clworker:clworker "$ENVFILE"; chmod 600 "$ENVFILE"
-CONSOLE_ENV=/home/clworker/.config/chosen-local/console.env
+CONSOLE_ENV=/etc/chosen-local/console.env
 if [ ! -f "$CONSOLE_ENV" ]; then
-  install -o clworker -g clworker -m 600 "$DEST/deploy/console.env.example" "$CONSOLE_ENV"
+  install -o root -g root -m 600 "$DEST/deploy/console.env.example" "$CONSOLE_ENV"
   echo
-  echo "Created $CONSOLE_ENV from the example (names only)."
+  echo "Created $CONSOLE_ENV from the example (names only, root only)."
   echo "Fill in the values (deploy/PHASE1.md, workstation step W2), then run this script again."
   exit 0
 fi
-chown clworker:clworker "$CONSOLE_ENV"; chmod 600 "$CONSOLE_ENV"
+chown root:root "$CONSOLE_ENV"; chmod 600 "$CONSOLE_ENV"
 
 # --- 6. restart -------------------------------------------------------------------
 systemctl restart llama-server.service cl-review.service

@@ -58,9 +58,12 @@ that conflicts with them, unless Jack changes the plan itself.
   successful executions and prunes the rest.
 - **Workstation** (Windows 11, WSL2 Ubuntu 24.04, RTX 5090 32 GB, Ryzen 9 9950X): llama.cpp
   `llama-server` on `127.0.0.1:8080`, transcription and diarization, the Python worker, and the
-  review console. In production all of these run as `clworker` from a deployed copy in
-  `/opt/chosen-local`, never from this checkout, as systemd units reading
-  `EnvironmentFile=/home/clworker/.config/chosen-local/worker.env`. The worker connects out to
+  review console. In production these run from a deployed copy in `/opt/chosen-local`, never
+  from this checkout, as systemd units reading
+  `EnvironmentFile=/home/clworker/.config/chosen-local/worker.env`. Everything runs as
+  `clworker` except the review console, which runs as `clconsole` and also reads the root-only
+  `/etc/chosen-local/console.env` (its own database login); the two users share only
+  `/home/clworker/cl-private`, through the `clprivate` group. The worker connects out to
   Postgres over Tailscale. No port at home is open to the internet.
 - **Review console** (`review/`, Starlette): a small web app on the workstation, served only over
   Tailscale to the founders' devices. It is where founders see transcript passages, extractions,
@@ -71,7 +74,8 @@ that conflicts with them, unless Jack changes the plan itself.
   `docs/systems.md` and `.claude/rules/systems.md`. A system never edits `worker/` or `review/`.
 - **Database logins act only as their own actors** (migration 2): the worker login only as system
   actors, n8n only as `n8n`, the console login (`cl_console`) only as founders or
-  `review_console`. Never work around this, for example by giving the worker the console's login.
+  `review_console`. Never work around this, for example by giving the worker the console's login
+  or by running the console as `clworker`.
 - **Job queue**: a Postgres `jobs` table claimed with `FOR UPDATE SKIP LOCKED`. No Redis. n8n
   alerts Slack when the oldest pending job is older than the threshold in `docs/decisions.md`.
 - **Tools**: Close (calls, texts, pipeline; one seat), Slack (alerts and links), Cal.com (booking;

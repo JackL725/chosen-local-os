@@ -7,11 +7,10 @@ OnFailure=cl-unit-failed@%n.service
 [Service]
 User=clworker
 Group=clworker
+SupplementaryGroups=clprivate
+UMask=0007
 WorkingDirectory=/opt/chosen-local
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
-# console.env holds the only Ledger login that may act as a founder (cl_console). Only
-# cl-review loads it; every other clworker service is denied the file.
-InaccessiblePaths=-/home/clworker/.config/chosen-local/console.env
 EnvironmentFile=-/opt/chosen-local/REVISION.env
 ExecStart=/opt/chosen-local/.venv/bin/python -m worker
 Restart=always

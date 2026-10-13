@@ -1,6 +1,7 @@
 """Review console configuration, from the environment the systemd unit provides:
-worker.env for shared values and console.env for the console's own login, which no other
-service can read (deploy/systemd/*.service InaccessiblePaths=)."""
+worker.env for shared values, and /etc/chosen-local/console.env (root only) for the
+console's own login. The console runs as clconsole, so the worker can read neither that
+file nor this process's environment."""
 
 from __future__ import annotations
 

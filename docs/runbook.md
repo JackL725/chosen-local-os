@@ -20,7 +20,7 @@ DC="sudo docker compose -f /opt/chosen-local-vps/deploy/compose.prod.yml --env-f
 | Ledger backup | VPS, `cl-pg-backup.timer` 03:30 Denver | root | B2 bucket, prefix `vps` |
 | llama-server | workstation WSL, `llama-server.service` | clworker | 127.0.0.1:8080 |
 | worker | workstation WSL, `cl-worker.service` | clworker | outbound to Ledger over Tailscale |
-| review console | workstation WSL, `cl-review.service` | clworker | 127.0.0.1:8090; tailnet `https://<workstation>:8443` via Windows `tailscale serve` |
+| review console | workstation WSL, `cl-review.service` | clconsole | 127.0.0.1:8090; tailnet `https://<workstation>:8443` via Windows `tailscale serve` |
 | private-data backup | workstation WSL, `cl-restic.timer` 02:30 Denver | clworker | B2 bucket, prefix `workstation` |
 | unit failure alerts | workstation, `cl-unit-failed@.service` | clworker | Slack `#cl-alerts` |
 
@@ -86,9 +86,9 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
 - **Start / stop / restart:** `sudo systemctl restart cl-review`. **Health:** `curl -s 127.0.0.1:8090/healthz`.
 - **Logs:** `journalctl -u cl-review -n 50 --no-pager`. Requests are never logged; you will see
   start-up, sign-in outcomes (no names) and error classes.
-- **Founder logins** (run as clworker; passwords are typed at a prompt):
+- **Founder logins** (passwords are typed at a prompt):
   ```bash
-  A="sudo -u clworker /opt/chosen-local/scripts/console_admin.sh"
+  A="sudo /opt/chosen-local/scripts/console_admin.sh"     # runs as clconsole via systemd-run
   $A list
   $A create-user sam --tailscale-login <login>     # also resets an existing login
   $A set-password sam                              # signs out all of Sam's sessions
@@ -101,11 +101,15 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
   sign-out, on a password change, or if the Tailscale identity changes. Sign in again.
 - **"The Ledger refused that: …":** a database rule said no (for example, activating a coach
   under a draft standard). The message is the rule; nothing was saved.
-- **Database login:** the console uses `cl_console` (`CONSOLE_DATABASE_URL` in
-  `/home/clworker/.config/chosen-local/console.env`), the only login that may act as a founder.
-  Only `cl-review` loads that file; systemd hides it from the worker, llama-server and the backup
-  units (`InaccessiblePaths=`). Never copy it into `worker.env`. Rotate it with
-  `deploy/postgres/create_console_login.sh` on the VPS, update `console.env`, restart `cl-review`.
+- **Runs as `clconsole`**, not `clworker`, so the worker can read neither the console's
+  database login nor its process environment. The two users share only
+  `/home/clworker/cl-private` (group `clprivate`, folders setgid, `UMask=0007`).
+- **Database login:** `cl_console` (`CONSOLE_DATABASE_URL` in `/etc/chosen-local/console.env`,
+  root only, mode 600), the only login that may act as a founder. Never copy it into
+  `worker.env`. Rotate it with `deploy/postgres/create_console_login.sh` on the VPS, update
+  `console.env`, restart `cl-review`.
+- **"Permission denied" on evidence files or backups:** rerun `sudo scripts/deploy_local.sh`; it
+  resets the group and permissions on `cl-private`.
 
 ## Systems, settings and rules
 

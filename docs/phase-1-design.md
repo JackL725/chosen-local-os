@@ -31,10 +31,13 @@ build differs from the sections below, this list wins:
   The console shows "needs a file" until there is one. This is a workflow rule in the coaches
   system, not a database rule.
 - **An active coach's file cannot be un-verified**; pause the coach first.
-- **The console login** is `cl_console`, created by `deploy/postgres/create_console_login.sh`
-  (rerunning `create_logins.sh` would rotate every login). It lives in its own `console.env`,
-  loaded only by `cl-review`; every other `clworker` service is denied the file by systemd
-  `InaccessiblePaths=`. `REVIEW_CONSOLE_SECRET` is gone; sessions live in the Ledger.
+- **The console runs as its own Linux user, `clconsole`** (decision 14, Oct 13, after the
+  review). Its database login, `cl_console` (created by `deploy/postgres/create_console_login.sh`;
+  rerunning `create_logins.sh` would rotate every login), lives in the root-only
+  `/etc/chosen-local/console.env`, which systemd reads before dropping privileges. The worker
+  can read neither the file nor the console's process environment. `clworker` and `clconsole`
+  share only `cl-private`, through the `clprivate` group. `REVIEW_CONSOLE_SECRET` is gone;
+  sessions live in the Ledger.
 - **Independent review** (a separate agent, after 1e) found eight holes, now closed with a
   regression test each in `tests/db/test_review_findings.py` and alongside: the worker could
   read the console's login; the worker could move verified vetting items between coaches;
@@ -44,9 +47,12 @@ build differs from the sections below, this list wins:
   need-state; a bootstrap rerun restored draft items a founder had deleted. Also fixed: the
   contract checker missed aliased database connections; console tests now run through a real
   console login; a SIGTERM before a slot starts is no longer lost.
-- **Remaining exposure:** any process run as `clworker` outside these systemd units (for
-  example `sudo -u clworker` by hand) can still read `console.env`. Running the console as its
-  own Unix user would close that; not done, because it means splitting `cl-private` access.
+- **A re-check of those fixes** by the same reviewer found three more, now closed with tests:
+  the worker could still set `required` directly (and re-assign a job type to another system);
+  a founder could move an active coach to another standard in raw SQL; and during a lockout a
+  right and a wrong password got different answers. The re-check also showed that hiding
+  `console.env` was not enough while both services ran as `clworker` (the worker could read the
+  console's process environment), which led to decision 14.
 - **`uv.lock` was not regenerated** (no package index where it was built). Run `uv lock` before
   deploying (`deploy/PHASE1.md` L2). CI resolves fresh each run, so it is unaffected.
 - **Local verification** ran on Python 3.13 with ruff 0.16.8 and a real Postgres 16.15; CI runs
@@ -89,6 +95,7 @@ build differs from the sections below, this list wins:
 | 11 | Local sign-in at the workstation | Allowed for Jack only, password alone. |
 | 12 | Roster minimums | None. Coaches at a wide range of prices and in many specialties are welcome; the two launch need-states are where marketing goes first. |
 | 13 | Stale-job alert threshold (item 24) | 4 hours, stored as a console setting. |
+| 14 | Console's Linux user (after the review) | Its own user, `clconsole`, sharing only `cl-private` with `clworker` through the `clprivate` group. |
 
 Decision 12 means a coach may cover any active need-state, not just the launched ones.
 "Launched" is a marketing flag per market: it decides what the readiness view counts toward the

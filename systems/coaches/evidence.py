@@ -60,11 +60,13 @@ def store(
     ext = extension(filename)
     rel = Path("coaches") / coach_id / item_id / f"{secrets.token_hex(16)}{ext}"
     dest = private_dir / rel
-    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Group-accessible (clprivate): the console writes evidence as clconsole and the
+    # restic backup reads it as clworker. cl-private is setgid, so new folders keep the group.
+    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
     tmp = dest.with_suffix(dest.suffix + ".part")
     digest = hashlib.sha256()
     size = 0
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
     try:
         with os.fdopen(fd, "wb") as out:
             while chunk := source.read(CHUNK):

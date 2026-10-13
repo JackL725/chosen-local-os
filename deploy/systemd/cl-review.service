@@ -1,17 +1,24 @@
 # Review console: binds 127.0.0.1:8090 inside WSL. Windows sees it on localhost, and
 # Tailscale on Windows publishes it to the founders' devices on port 8443.
+#
+# It runs as its own user, clconsole, not clworker: its database login (cl_console) is the
+# only one that may act as a founder, so the worker must not be able to read it, neither
+# from the file nor from this process's environment. systemd reads both EnvironmentFiles
+# as root before dropping to clconsole; console.env is root-only (mode 600).
+# clconsole shares only /home/clworker/cl-private, through the clprivate group.
 [Unit]
 Description=Chosen Local: review console
 After=network.target
 OnFailure=cl-unit-failed@%n.service
 
 [Service]
-User=clworker
-Group=clworker
+User=clconsole
+Group=clconsole
+SupplementaryGroups=clprivate
+UMask=0007
 WorkingDirectory=/opt/chosen-local
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
-# The console's own login (cl_console). No other service can read this file.
-EnvironmentFile=/home/clworker/.config/chosen-local/console.env
+EnvironmentFile=/etc/chosen-local/console.env
 ExecStart=/opt/chosen-local/.venv/bin/python -m review
 Restart=always
 RestartSec=5

@@ -1,13 +1,14 @@
-"""Founder logins for the review console. Jack runs this on the workstation as clworker:
+"""Founder logins for the review console. Jack runs this on the workstation with sudo; the
+script runs it as clconsole with the console's environment:
 
-    sudo -u clworker /opt/chosen-local/scripts/console_admin.sh create-user jack --allow-local
-    sudo -u clworker /opt/chosen-local/scripts/console_admin.sh create-user sam \
+    sudo /opt/chosen-local/scripts/console_admin.sh create-user jack --allow-local
+    sudo /opt/chosen-local/scripts/console_admin.sh create-user sam \
         --tailscale-login sam@example.com
     ... set-password sam | unlock sam | sign-out-everywhere sam | list
 
 Passwords are typed at a prompt, twice, and never passed on the command line or logged.
-Connects with CONSOLE_DATABASE_URL from console.env (the console's own login) as the
-review_console actor.
+Connects with CONSOLE_DATABASE_URL from /etc/chosen-local/console.env (the console's own
+login) as the review_console actor.
 """
 
 from __future__ import annotations

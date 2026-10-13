@@ -6,7 +6,4 @@ Description=Chosen Local: alert that %i failed
 Type=oneshot
 User=clworker
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
-# console.env holds the only Ledger login that may act as a founder (cl_console). Only
-# cl-review loads it; every other clworker service is denied the file.
-InaccessiblePaths=-/home/clworker/.config/chosen-local/console.env
 ExecStart=/opt/chosen-local/scripts/unit_failed_alert.sh %i

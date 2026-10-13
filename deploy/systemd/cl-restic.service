@@ -8,9 +8,8 @@ OnFailure=cl-unit-failed@%n.service
 Type=oneshot
 User=clworker
 Group=clworker
+SupplementaryGroups=clprivate
+UMask=0007
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
-# console.env holds the only Ledger login that may act as a founder (cl_console). Only
-# cl-review loads it; every other clworker service is denied the file.
-InaccessiblePaths=-/home/clworker/.config/chosen-local/console.env
 ExecStart=/opt/chosen-local/scripts/backup_private.sh
 Nice=10
