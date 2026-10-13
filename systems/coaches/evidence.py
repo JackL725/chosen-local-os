@@ -60,9 +60,10 @@ def store(
     ext = extension(filename)
     rel = Path("coaches") / coach_id / item_id / f"{secrets.token_hex(16)}{ext}"
     dest = private_dir / rel
-    # Group-accessible (clprivate): the console writes evidence as clconsole and the
-    # restic backup reads it as clworker. cl-private is setgid, so new folders keep the group.
-    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
+    # Group-readable, not group-writable (clprivate): the console writes evidence as
+    # clconsole; the restic backup reads it as clworker and cannot change it. cl-private is
+    # setgid, so new folders keep the group.
+    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
     tmp = dest.with_suffix(dest.suffix + ".part")
     digest = hashlib.sha256()
     size = 0
@@ -92,6 +93,15 @@ def store(
     except BaseException:
         dest.unlink(missing_ok=True)
         raise
+
+
+def matches(path: Path, sha256: str) -> bool:
+    """True if the file on disk is still the one whose SHA-256 the Ledger recorded."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while chunk := fh.read(CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest() == sha256
 
 
 def resolve(private_dir: Path, relative_path: str) -> Path:

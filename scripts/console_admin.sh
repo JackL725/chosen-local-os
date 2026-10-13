@@ -11,7 +11,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 exec systemd-run --quiet --pty --wait --collect \
-  --uid=clconsole --gid=clconsole -p SupplementaryGroups=clprivate \
+  --uid=clconsole --gid=clconsole -p SupplementaryGroups=clprivate -p NoNewPrivileges=yes \
   -p EnvironmentFile=/home/clworker/.config/chosen-local/worker.env \
   -p EnvironmentFile=/etc/chosen-local/console.env \
   -p WorkingDirectory=/opt/chosen-local \

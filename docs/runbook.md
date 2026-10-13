@@ -131,7 +131,13 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
   coach still in vetting stays on its standard until a founder moves it.
 - **Evidence files** live on the workstation in `/home/clworker/cl-private/coaches/<coach>/<item>/`
   with random names; the Ledger holds the path, SHA-256 and size. They are in the nightly restic
-  backup with the rest of `cl-private`.
+  backup with the rest of `cl-private`. The console writes them as `clconsole`; the worker and the
+  backup can read but not change them (`cl-private` is root-owned, setgid and sticky; files are
+  group-readable only).
+- **"This file has changed on the workstation since it was uploaded":** its SHA-256 no longer
+  matches the Ledger, so the console refuses to show it and Slack gets
+  `evidence_changed_on_disk | evidence <id>`. Treat it as tampering: restore the file from restic
+  (below), and check `journalctl` for what ran as `clworker` or `clconsole`.
 - **A file shows "not available on this workstation":** restore it from restic:
   ```bash
   sudo -u clworker bash -c 'set -a; . ~/.config/chosen-local/restic.env; restic restore latest --tag cl-private --target /home/clworker/restore --include "/home/clworker/cl-private/coaches/<coach id>"'

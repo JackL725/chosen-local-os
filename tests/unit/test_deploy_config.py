@@ -60,8 +60,18 @@ def test_the_login_file_is_root_only_and_the_admin_tool_runs_as_clconsole():
     assert 'if [ "$(id -u)" -ne 0 ]' in admin  # the URL is read by systemd as root
 
 
-def test_files_in_the_shared_folder_stay_group_readable():
+def test_files_in_the_shared_folder_are_group_readable_not_writable():
     for name in ("cl-worker.service", "cl-restic.service", "cl-review.service"):
         u = _unit(name)
-        assert u.get("UMask") == ["0007"], name
+        assert u.get("UMask") == ["0027"], name
         assert u.get("SupplementaryGroups") == ["clprivate"], name
+    deploy = (ROOT / "scripts" / "deploy_local.sh").read_text()
+    # root-owned, setgid and sticky: neither user can rename the other's folders
+    assert 'install -d -o root -g clprivate -m 3770 "$PRIV"' in deploy
+    assert "g+rw" not in deploy
+
+
+def test_deploy_refuses_an_old_copy_of_the_console_login():
+    deploy = (ROOT / "scripts" / "deploy_local.sh").read_text()
+    assert "/home/clworker/.config/chosen-local/console.env" in deploy
+    assert "grep -q '^CONSOLE_DATABASE_URL=' \"$ENVFILE\"" in deploy

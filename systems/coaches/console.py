@@ -12,6 +12,10 @@ from starlette.routing import Route
 from review import web
 from systems.coaches import evidence, service
 from worker import business_settings
+from worker.logs import get_logger
+from worker.slack import format_category
+
+log = get_logger("review")
 
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -264,7 +268,7 @@ def upload(page: web.Page) -> Response:
 def download(page: web.Page) -> Response:
     evidence_id = _id(page, "evidence_id")
     row = page.one(
-        """SELECT relative_path, display_name, content_type FROM vetting_evidence
+        """SELECT relative_path, display_name, content_type, sha256 FROM vetting_evidence
             WHERE id = %s AND kind = 'file' AND removed_at IS NULL""",
         (evidence_id,),
     )
@@ -276,6 +280,20 @@ def download(page: web.Page) -> Response:
         )
     except service.CoachError as exc:
         raise web.UserError(str(exc)) from None
+    if not evidence.matches(path, row["sha256"]):
+        # The file on disk is not the one a founder uploaded and verified. Never serve it.
+        log.warning("evidence hash mismatch", extra={"status": "refused"})
+        try:
+            web.state(page.request).alert(
+                format_category("evidence_changed_on_disk", {"evidence": evidence_id})
+            )
+        except ValueError:
+            pass
+        raise web.UserError(
+            "This file has changed on the workstation since it was uploaded, so it is not shown."
+            " Slack has been alerted; restore it from the backup (runbook, Coaches and vetting"
+            " evidence)."
+        )
     inline = path.suffix.lower() in evidence.INLINE
     return FileResponse(
         path,

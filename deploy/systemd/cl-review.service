@@ -5,7 +5,8 @@
 # only one that may act as a founder, so the worker must not be able to read it, neither
 # from the file nor from this process's environment. systemd reads both EnvironmentFiles
 # as root before dropping to clconsole; console.env is root-only (mode 600).
-# clconsole shares only /home/clworker/cl-private, through the clprivate group.
+# clconsole shares only /home/clworker/cl-private, through the clprivate group: each user
+# can read the other's files there and change only its own (UMask=0027, sticky folder).
 [Unit]
 Description=Chosen Local: review console
 After=network.target
@@ -15,7 +16,7 @@ OnFailure=cl-unit-failed@%n.service
 User=clconsole
 Group=clconsole
 SupplementaryGroups=clprivate
-UMask=0007
+UMask=0027
 WorkingDirectory=/opt/chosen-local
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
 EnvironmentFile=/etc/chosen-local/console.env

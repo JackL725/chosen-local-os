@@ -36,8 +36,12 @@ build differs from the sections below, this list wins:
   rerunning `create_logins.sh` would rotate every login), lives in the root-only
   `/etc/chosen-local/console.env`, which systemd reads before dropping privileges. The worker
   can read neither the file nor the console's process environment. `clworker` and `clconsole`
-  share only `cl-private`, through the `clprivate` group. `REVIEW_CONSOLE_SECRET` is gone;
-  sessions live in the Ledger.
+  share only `cl-private`, through the `clprivate` group: the folder is root-owned, setgid and
+  sticky, and each user's files are group-readable but not group-writable, so neither can
+  change or move the other's. Evidence downloads are checked against the SHA-256 in the Ledger.
+  `REVIEW_CONSOLE_SECRET` is gone; sessions live in the Ledger. The permission model was not
+  exercised with real users in the build workspace (a safety check stopped that test); it is
+  acceptance test A9.
 - **Independent review** (a separate agent, after 1e) found eight holes, now closed with a
   regression test each in `tests/db/test_review_findings.py` and alongside: the worker could
   read the console's login; the worker could move verified vetting items between coaches;

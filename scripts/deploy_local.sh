@@ -13,7 +13,8 @@
 #   5. creates worker.env from the example (names only) if it does not exist yet, and
 #      stops there so you can fill it in;
 #   6. restarts the services and shows their state.
-# It never reads worker.env's values and never touches /home/clworker/cl-private.
+# It never reads worker.env's or console.env's values. It changes cl-private's group and
+# permissions once, the first time it finds the folder without the clprivate group.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -54,10 +55,21 @@ usermod -a -G clprivate clworker
 usermod -a -G clprivate clconsole
 # /home/clworker: clprivate may pass through it to cl-private, but not list it.
 install -d -o clworker -g clprivate -m 710 /home/clworker
-install -d -o clworker -g clprivate -m 2770 /home/clworker/cl-private /home/clworker/cl-private/evals
-chgrp -R clprivate /home/clworker/cl-private
-find /home/clworker/cl-private -type d -exec chmod 2770 {} +
-find /home/clworker/cl-private -type f -exec chmod g+rw,o-rwx {} +
+# cl-private: owned by root, group clprivate, setgid (new folders keep the group) and sticky
+# (each user can rename or delete only its own folders). Each user's files are group-readable
+# but not group-writable (UMask=0027), so the worker can read the console's evidence for the
+# backup but cannot change it, and the console can read the worker's files but not change them.
+PRIV=/home/clworker/cl-private
+if [ -d "$PRIV" ] && [ "$(stat -c %G "$PRIV")" != clprivate ]; then
+  # One-time move from Phase 0 (clworker:clworker 700). Later runs leave files alone, so
+  # their ctime does not change and restic does not re-read them.
+  chgrp -R clprivate "$PRIV"
+  find "$PRIV" -type d -exec chmod 2750 {} +
+  find "$PRIV" -type f -exec chmod g+r,g-w,o-rwx {} +
+  echo "Gave clprivate read access to $PRIV (one-time)."
+fi
+install -d -o root -g clprivate -m 3770 "$PRIV"
+[ -d "$PRIV/evals" ] || install -d -o clworker -g clprivate -m 2750 "$PRIV/evals"
 install -d -o clworker -g clworker -m 700 /home/clworker/.config /home/clworker/.config/chosen-local
 install -d -o root -g root -m 700 /etc/chosen-local
 
@@ -96,6 +108,17 @@ if [ ! -f "$ENVFILE" ]; then
   exit 0
 fi
 chown clworker:clworker "$ENVFILE"; chmod 600 "$ENVFILE"
+# The console's login must never be where clworker can read it. Earlier drafts of the
+# Phase 1 steps put it in worker.env or in ~clworker/.config; refuse to go on if either is there.
+OLD_CONSOLE_ENV=/home/clworker/.config/chosen-local/console.env
+if [ -e "$OLD_CONSOLE_ENV" ] || grep -q '^CONSOLE_DATABASE_URL=' "$ENVFILE"; then
+  echo "The console's database login is in a file clworker can read:" >&2
+  [ -e "$OLD_CONSOLE_ENV" ] && echo "  $OLD_CONSOLE_ENV  (delete it: sudo rm $OLD_CONSOLE_ENV)" >&2
+  grep -q '^CONSOLE_DATABASE_URL=' "$ENVFILE" && echo "  CONSOLE_DATABASE_URL in $ENVFILE  (delete that line)" >&2
+  echo "It belongs only in /etc/chosen-local/console.env. Then rotate it on the VPS with" >&2
+  echo "deploy/postgres/create_console_login.sh, since clworker may have read it." >&2
+  exit 1
+fi
 CONSOLE_ENV=/etc/chosen-local/console.env
 if [ ! -f "$CONSOLE_ENV" ]; then
   install -o root -g root -m 600 "$DEST/deploy/console.env.example" "$CONSOLE_ENV"

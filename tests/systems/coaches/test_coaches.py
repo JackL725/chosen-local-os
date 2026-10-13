@@ -360,3 +360,25 @@ def test_readiness_lists_each_missing_item_once(client, ledger, seeded):
     row = next(v for v in data["vetting"] if v["id"] == cid)
     assert row["missing"] == ["Interview", "Reference", "Agreement"]
     assert row["need_states"] == ["career", "fitness"]
+
+
+def test_a_file_changed_on_disk_is_never_served(client, ledger, seeded, console_settings, alerts):
+    coach = _new_coach(client)
+    detail = f"/s/coaches/{coach}"
+    _post(client, f"{detail}/status", {"status": "vetting"}, referer=detail)
+    item = _items(ledger, coach)["agreement"]
+    _post(
+        client,
+        f"{detail}/items/{item}/upload",
+        {},
+        referer=detail,
+        files={"file": ("a.pdf", io.BytesIO(b"%PDF-1.4 real"), "application/pdf")},
+    )
+    ev = ledger.execute(
+        "SELECT id, relative_path FROM vetting_evidence WHERE kind = 'file'"
+    ).fetchone()
+    (console_settings.private_data_dir / ev["relative_path"]).write_bytes(b"%PDF forged")
+    r = client.get(f"/s/coaches/evidence/{ev['id']}", headers=H)
+    assert r.status_code == 400 and "changed on the workstation" in r.text
+    assert b"forged" not in r.content
+    assert len(alerts) == 1 and f"evidence {ev['id']}" in alerts[0]
