@@ -156,6 +156,11 @@ BEGIN
     RAISE EXCEPTION 'only a founder can move a coach to another vetting standard'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'active' AND NEW.status = 'active'
+     AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id THEN
+    RAISE EXCEPTION 'pause the coach before moving them to another vetting standard'
+      USING ERRCODE = 'check_violation';
+  END IF;
   IF TG_OP = 'UPDATE' THEN
     NEW.last_active_standard_id := OLD.last_active_standard_id;
   ELSE
@@ -643,6 +648,23 @@ END $$;
 
 
 --
+-- Name: system_job_types_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.system_job_types_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.system_key IS DISTINCT FROM OLD.system_key
+     AND NOT ledger_is_rule_writer(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can move a job type to another system'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
 -- Name: systems_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -652,6 +674,11 @@ CREATE FUNCTION public.systems_guard() RETURNS trigger
 DECLARE
   v_actor uuid := ledger_current_actor_id();
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.required IS DISTINCT FROM OLD.required
+     AND NOT ledger_is_rule_writer(v_actor) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can change whether a system is required'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.required AND OLD.enabled AND NOT NEW.enabled THEN
     RAISE EXCEPTION 'system % is required and cannot be turned off', NEW.key
       USING ERRCODE = 'check_violation';
@@ -2809,6 +2836,13 @@ CREATE TRIGGER settings_updated_at BEFORE UPDATE ON public.settings FOR EACH ROW
 --
 
 CREATE TRIGGER system_job_types_events AFTER INSERT OR DELETE OR UPDATE ON public.system_job_types FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('job_type');
+
+
+--
+-- Name: system_job_types system_job_types_owner; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER system_job_types_owner BEFORE UPDATE ON public.system_job_types FOR EACH ROW EXECUTE FUNCTION public.system_job_types_guard();
 
 
 --

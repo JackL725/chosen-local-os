@@ -119,6 +119,11 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_actor uuid := ledger_current_actor_id();
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.required IS DISTINCT FROM OLD.required
+     AND NOT ledger_is_rule_writer(v_actor) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can change whether a system is required'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.required AND OLD.enabled AND NOT NEW.enabled THEN
     RAISE EXCEPTION 'system % is required and cannot be turned off', NEW.key
       USING ERRCODE = 'check_violation';
@@ -147,6 +152,21 @@ CREATE TABLE system_job_types (
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- A job type keeps the system that first registered it, unless a founder (or a
+-- migration) moves it: otherwise a writer could re-assign a paused system's jobs.
+CREATE FUNCTION system_job_types_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.system_key IS DISTINCT FROM OLD.system_key
+     AND NOT ledger_is_rule_writer(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can move a job type to another system'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER system_job_types_owner BEFORE UPDATE ON system_job_types
+  FOR EACH ROW EXECUTE FUNCTION system_job_types_guard();
 
 -- ---------------------------------------------------------------------------
 -- 4. Settings (definitions and defaults live in code; values here)
@@ -465,6 +485,11 @@ BEGIN
      AND NOT ledger_is_founder(v_actor) THEN
     RAISE EXCEPTION 'only a founder can move a coach to another vetting standard'
       USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'active' AND NEW.status = 'active'
+     AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id THEN
+    RAISE EXCEPTION 'pause the coach before moving them to another vetting standard'
+      USING ERRCODE = 'check_violation';
   END IF;
   IF TG_OP = 'UPDATE' THEN
     NEW.last_active_standard_id := OLD.last_active_standard_id;
@@ -848,7 +873,7 @@ DROP TABLE console_sessions, console_users, vetting_evidence, vetting_item_types
 DROP FUNCTION console_users_guard(), vetting_evidence_guard(), vetting_item_types_guard(),
               vetting_standards_guard(), ledger_default_market(), market_need_states_stamp(),
               markets_time_zone_guard(), ledger_setting(text, jsonb), settings_stamp(),
-              systems_guard(), ledger_rule_writer_guard(), ledger_is_rule_writer(uuid);
+              systems_guard(), system_job_types_guard(), ledger_rule_writer_guard(), ledger_is_rule_writer(uuid);
 
 ALTER TABLE jobs DROP CONSTRAINT jobs_job_type_check;
 ALTER TABLE jobs ADD CONSTRAINT jobs_job_type_check CHECK (job_type ~ '^[a-z][a-z0-9_]*$');

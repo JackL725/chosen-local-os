@@ -162,6 +162,9 @@ def test_checker_catches_code_violations(tmp_path: Path):
     assert "manifest.py may import only from systems._contract" in found
     assert found.count("service.py opens its own database connection") == 2
     assert found.count("sneaky.py opens its own database connection") == 4
+    (folder / "sneakier.py").write_text("from psycopg import Connection\nConnection.connect('x')\n")
+    found = "\n".join(_check._check_code("demo", folder))
+    assert "sneakier.py opens its own database connection" in found
     assert found.count("configures logging") >= 2
     assert "fine.py" not in found
 

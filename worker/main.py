@@ -79,7 +79,7 @@ class Worker:
         processed = 0
         last_reap = 0.0
         try:
-            while not self._stop.is_set():
+            while not self._stop.is_set() and not self._stop_requested:
                 if time.monotonic() - last_reap >= self.settings.worker_reap_interval_s:
                     self._reap(conn)
                     last_reap = time.monotonic()

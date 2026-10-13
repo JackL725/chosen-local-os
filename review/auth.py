@@ -132,10 +132,14 @@ def sign_in(
         with transaction(conn, actor=SYSTEM_ACTOR), conn.cursor() as cur:
             cur.execute(
                 """UPDATE console_users SET failed_signins = failed_signins + 1
-                    WHERE id = %s RETURNING failed_signins""",
+                    WHERE id = %s RETURNING failed_signins, locked_until""",
                 (uid,),
             )
-            failed = cur.fetchone()["failed_signins"]
+            row = cur.fetchone()
+            failed = row["failed_signins"]
+            # Locked meanwhile by a parallel guess: answer exactly as for the right password,
+            # so a lockout never tells a right password from a wrong one.
+            already_locked = row["locked_until"] is not None and row["locked_until"] > now
             locked = failed >= int(settings["console.max_failed_signins"])
             if locked:
                 cur.execute(
@@ -143,6 +147,8 @@ def sign_in(
                     (lock_until, uid),
                 )
         _emit(conn, SYSTEM_ACTOR, uid, "console.signin_failed", {"locked": locked})
+        if already_locked:
+            raise SignInRefused("This account is locked for a few minutes after too many tries.")
         if locked:
             raise SignInRefused(
                 "This account is now locked for a few minutes after too many tries.",

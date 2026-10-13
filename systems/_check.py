@@ -198,6 +198,9 @@ def _check_code(key: str, folder: Path) -> list[str]:
                     if a.name.split(".")[0] == "psycopg_pool":
                         out.append(f"{key}: {rel} opens its own database connection")
         for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "psycopg":
+                pg_names.update(a.asname or a.name for a in node.names)
+        for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
                 names = {a.name for a in node.names}

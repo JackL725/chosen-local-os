@@ -40,7 +40,8 @@ Logins created. Copy each password now; it will not be shown again.
   cl_reporting  $REPORTING_PW
       -> read-only access for reports (store it; nothing uses it yet)
   cl_console    $CONSOLE_PW
-      -> workstation: CONSOLE_DATABASE_URL in /home/clworker/.config/chosen-local/worker.env
+      -> workstation: CONSOLE_DATABASE_URL in the console's own env file (deploy/PHASE1.md W2),
+         never in worker.env
          (the only login that may act as a founder)
 
 OUT

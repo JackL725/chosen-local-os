@@ -1,8 +1,8 @@
 #!/bin/bash
 # Create (or rotate) only the review console's login, cl_console. Run on the VPS:
 #   sudo /opt/chosen-local-vps/deploy/postgres/create_console_login.sh
-# Prints the password ONCE. It goes into CONSOLE_DATABASE_URL in
-# /home/clworker/.config/chosen-local/worker.env on the workstation. This is the only
+# Prints the password ONCE. It goes into CONSOLE_DATABASE_URL in the console's own env
+# file on the workstation (deploy/PHASE1.md W2), never in worker.env. This is the only
 # Ledger login that may act as a founder (migration 2), so keep it off every other machine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,5 +19,5 @@ cat <<OUT
 cl_console is ready. Copy the password now; it will not be shown again.
 
   cl_console    $PW
-      -> workstation: CONSOLE_DATABASE_URL in /home/clworker/.config/chosen-local/worker.env
+      -> workstation: CONSOLE_DATABASE_URL in the console's own env file (deploy/PHASE1.md W2)
 OUT
