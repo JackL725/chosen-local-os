@@ -1,0 +1,35 @@
+{% set c = coach or {} %}
+<div class="row">
+  <div style="flex: 1 1 260px"><label for="display_name">Display name</label><input id="display_name" name="display_name" type="text" required value="{{ c.get('display_name') or '' }}"></div>
+  <div style="flex: 1 1 260px"><label for="legal_name">Legal name</label><input id="legal_name" name="legal_name" type="text" value="{{ c.get('legal_name') or '' }}"></div>
+</div>
+<div class="row">
+  <div style="flex: 1 1 260px"><label for="email">Email</label><input id="email" name="email" type="email" value="{{ c.get('email') or '' }}"></div>
+  <div style="flex: 1 1 200px"><label for="phone">Phone</label><input id="phone" name="phone" type="text" value="{{ c.get('phone') or '' }}"></div>
+  <div style="flex: 1 1 260px"><label for="website">Website</label><input id="website" name="website" type="text" value="{{ c.get('website') or '' }}"></div>
+</div>
+<div class="row">
+  <div><label for="price_per_month">Price per month ($)</label><input id="price_per_month" name="price_per_month" type="text" inputmode="decimal" style="max-width: 140px"
+       value="{{ '{:.0f}'.format(c.get('price_per_month_cents') / 100) if c.get('price_per_month_cents') is not none else '' }}"></div>
+  <div><label for="program_length_months">Program length (months)</label><input id="program_length_months" name="program_length_months" type="number" min="1" max="60" style="max-width: 120px" value="{{ c.get('program_length_months') or '' }}"></div>
+  <div><label for="capacity_open">Open capacity (new clients now)</label><input id="capacity_open" name="capacity_open" type="number" min="0" max="500" style="max-width: 120px" value="{{ c.get('capacity_open') if c.get('capacity_open') is not none else '' }}"></div>
+</div>
+<div class="row">
+  {% if markets|length > 1 %}
+  <div><label for="market">Market</label><select id="market" name="market">
+    {% for m in markets %}<option value="{{ m.key }}" {{ 'selected' if m.key == c.get('market_key') else '' }}>{{ m.name }}</option>{% endfor %}</select></div>
+  {% endif %}
+  <div><label for="postal_code">Postal code</label><input id="postal_code" name="postal_code" type="text" style="max-width: 120px" value="{{ c.get('postal_code') or '' }}"></div>
+  <div style="flex: 1 1 220px"><label for="home_area">Area or neighborhood</label><input id="home_area" name="home_area" type="text" value="{{ c.get('home_area') or '' }}"></div>
+  <div><label for="serves_remote">Works remotely</label><select id="serves_remote" name="serves_remote">
+    <option value="">No</option><option value="yes" {{ 'selected' if c.get('serves_remote') else '' }}>Yes</option></select></div>
+  <div><label for="source">Source</label><select id="source" name="source"><option value="">–</option>
+    {% for s in sources %}<option {{ 'selected' if s == c.get('source') else '' }}>{{ s }}</option>{% endfor %}</select></div>
+</div>
+<label>Need-states this coach covers</label>
+<div class="row">
+  {% for n in need_states %}
+  <label style="margin: 0; color: inherit"><input type="checkbox" name="need_states" value="{{ n.key }}" {{ 'checked' if n.key in chosen else '' }}> {{ n.label }}</label>
+  {% else %}<span class="muted small">No need-states yet; add them under Need-states.</span>{% endfor %}
+</div>
+<label for="notes">Private notes</label><textarea id="notes" name="notes">{{ c.get('notes') or '' }}</textarea>

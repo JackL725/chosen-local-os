@@ -29,7 +29,7 @@
   h2 { font-size: 17px; margin: 28px 0 8px; }
   p.lede { color: var(--muted); margin: 0 0 18px; max-width: 70ch; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 0 0 16px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
   .stat .n { font-size: 26px; font-weight: 650; }
   .stat .l { color: var(--muted); font-size: 13px; }
@@ -61,5 +61,11 @@
   .row > * { flex: 0 1 auto; }
   details summary { cursor: pointer; color: var(--accent); }
   code { font-size: 13px; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
-  @media (max-width: 640px) { th:nth-child(n+4), td:nth-child(n+4) { display: none; } }
+  @media (max-width: 640px) {
+    th:nth-child(n+4), td:nth-child(n+4) { display: none; }
+    header.top { padding: 10px 16px; }
+    header.top nav { order: 3; flex-basis: 100%; gap: 2px 12px; }
+    header.top .who { margin-left: auto; }
+    main { padding: 18px 16px 48px; }
+  }
 </style>

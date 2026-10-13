@@ -686,13 +686,14 @@ GRANT INSERT, UPDATE ON systems, system_job_types TO ledger_worker, ledger_conso
 GRANT INSERT, UPDATE ON settings, markets, market_need_states, vetting_standards,
                         vetting_item_types, vetting_evidence
   TO ledger_console;
-GRANT DELETE ON vetting_item_types TO ledger_console;
+GRANT DELETE ON vetting_item_types, coach_need_states TO ledger_console;
 -- Console logins and sessions are for the console alone.
 GRANT SELECT, INSERT, UPDATE ON console_users, console_sessions TO ledger_console;
 
 -- migrate:down
 
 REVOKE ALL ON console_users, console_sessions FROM ledger_console;
+REVOKE DELETE ON coach_need_states FROM ledger_console;
 
 DROP FUNCTION api.queue_health(integer);
 CREATE FUNCTION api.queue_health(

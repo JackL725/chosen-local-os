@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Readiness{% endblock %}
+{% block content %}
+<h1>Readiness</h1>
+{% include "coaches/_subnav.html" %}
+<p class="lede">The Phase 1 gate: {{ required }} active coaches with open capacity in every launched need-state, each with a complete vetting file and a signed agreement. Change the number under Settings.</p>
+{% if not standard_active %}
+<div class="flash error">No vetting standard is active yet, so no coach can be marked active. Review the draft under <a href="{{ path_for('coaches:standards') }}">Vetting standards</a> and activate it.</div>
+{% endif %}
+{% if cells %}
+<div class="panel"><strong>{{ 'Gate met.' if all_met else 'Gate not met yet.' }}</strong></div>
+<table>
+  <tr><th>Market</th><th>Need-state</th><th>Ready</th><th>Active</th><th>In vetting</th></tr>
+  {% for c in cells %}
+  <tr><td>{{ c.market }}</td><td>{{ c.need_state }}</td>
+      <td><span class="chip {{ 'on' if c.met else 'off' }}">{{ c.ready }} / {{ c.required }}</span></td>
+      <td>{{ c.active }}</td><td>{{ c.vetting }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="panel">No need-state is launched in any market yet. Launch them under <a href="{{ path_for('need_states') }}">Need-states</a>.</div>
+{% endif %}
+<h2>In vetting</h2>
+{% if vetting %}
+<table>
+  <tr><th>Coach</th><th>Need-states</th><th>Still to verify</th></tr>
+  {% for v in vetting %}
+  <tr><td><a href="{{ path_for('coaches:detail', coach_id=v.id|string) }}">{{ v.display_name }}</a>
+        {% if v.standard_status != 'active' %}<span class="chip warn">draft standard</span>{% endif %}</td>
+      <td>{% for n in v.need_states %}<span class="chip">{{ n }}</span>{% endfor %}</td>
+      <td class="small">{% for m in v.missing %}<span class="chip">{{ m }}</span>{% else %}<span class="chip on">all verified</span>{% endfor %}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Nobody is in vetting.</p>{% endif %}
+{% endblock %}

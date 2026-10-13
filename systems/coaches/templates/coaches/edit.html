@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Add a coach{% endblock %}
+{% block content %}
+<h1>Add a coach</h1>
+{% include "coaches/_subnav.html" %}
+<p class="lede">New coaches start as prospects. Vetting starts from their page.</p>
+<form method="post" action="{{ path_for('coaches:create') }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% include "coaches/_form_fields.html" %}
+  <p><button type="submit">Add coach</button></p>
+</form>
+{% endblock %}
