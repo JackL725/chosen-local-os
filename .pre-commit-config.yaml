@@ -20,6 +20,12 @@ repos:
         language: system
         files: ^n8n/workflows/.*\.json$
         pass_filenames: false
+      - id: systems-contract
+        name: every system meets the contract
+        entry: uv run python scripts/check_systems.py
+        language: system
+        files: ^(systems|prompts|evals/synthetic|n8n/workflows)/
+        pass_filenames: false
       - id: no-secrets-in-env-examples
         name: env examples hold names only
         entry: uv run python scripts/check_env_examples.py

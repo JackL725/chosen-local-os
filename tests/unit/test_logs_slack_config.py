@@ -101,7 +101,7 @@ def test_settings_reject_non_local_model_and_need_private_dir(monkeypatch):
     assert s.local_llm_thinking is False
 
 
-def test_every_prompt_file_has_a_header_and_configured_versions_exist():
+def test_every_prompt_file_has_a_header_and_manifest_versions_exist():
     root = prompts.PROMPTS_DIR
     files = sorted(root.glob("*/*.v*.md"))
     assert files
@@ -109,7 +109,9 @@ def test_every_prompt_file_has_a_header_and_configured_versions_exist():
         system = path.parent.name
         name, _, version = path.name.removesuffix(".md").rpartition(".v")
         prompts.load(system, name, int(version))
-    s = Settings(database_url="postgres://x@127.0.0.1/y", private_data_dir=Path("evals/synthetic"))
-    for key, version in s.prompt_versions.items():
-        system, name = key.split("/")
-        assert prompts.load(system, name, version).version == f"{key}.v{version}"
+    import systems
+
+    for key, manifest in systems.all_manifests().items():
+        for spec in manifest.prompts:
+            loaded = prompts.load(key, spec.name, spec.version)
+            assert loaded.version == f"{key}/{spec.name}.v{spec.version}"

@@ -56,7 +56,7 @@ if [ ! -d "$DEST" ]; then
   echo "GIT_SHA=$SHA" > "$TMP/REVISION.env"
   (cd "$TMP" && UV_CACHE_DIR=/var/cache/chosen-local-uv UV_PYTHON_DOWNLOADS=never \
      "$UV" sync --no-dev --python "$PY" --quiet)
-  "$TMP/.venv/bin/python" -m compileall -q "$TMP/worker" "$TMP/review" "$TMP/evals" >/dev/null
+  "$TMP/.venv/bin/python" -m compileall -q "$TMP/worker" "$TMP/review" "$TMP/evals" "$TMP/systems" >/dev/null
   chown -R root:root "$TMP"
   chmod -R go-w "$TMP"
   chmod -R a+rX "$TMP"
