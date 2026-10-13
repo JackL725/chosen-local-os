@@ -523,16 +523,18 @@ def readiness(conn: psycopg.Connection, required: int) -> dict[str, Any]:
         cells = cur.fetchall()
         cur.execute(
             """SELECT c.id, c.display_name, c.market_key, s.status AS standard_status,
-                      array_remove(array_agg(DISTINCT cns.need_state_key), NULL) AS need_states,
-                      array_remove(array_agg(t.label ORDER BY t.sort_order)
-                          FILTER (WHERE t.required AND v.verified_at IS NULL), NULL) AS missing
+                      ARRAY(SELECT cns.need_state_key FROM coach_need_states cns
+                             WHERE cns.coach_id = c.id ORDER BY 1) AS need_states,
+                      ARRAY(SELECT t.label FROM vetting_item_types t
+                             WHERE t.standard_id = c.vetting_standard_id AND t.required
+                               AND NOT EXISTS (
+                                     SELECT 1 FROM vetting_items v
+                                      WHERE v.coach_id = c.id AND v.item_type_id = t.id
+                                        AND v.verified_at IS NOT NULL)
+                             ORDER BY t.sort_order, t.key) AS missing
                  FROM coaches c
                  LEFT JOIN vetting_standards s ON s.id = c.vetting_standard_id
-                 LEFT JOIN coach_need_states cns ON cns.coach_id = c.id
-                 LEFT JOIN vetting_item_types t ON t.standard_id = c.vetting_standard_id
-                 LEFT JOIN vetting_items v ON v.coach_id = c.id AND v.item_type_id = t.id
                 WHERE c.status = 'vetting'
-                GROUP BY c.id, c.display_name, c.market_key, s.status
                 ORDER BY c.display_name"""
         )
         vetting = cur.fetchall()

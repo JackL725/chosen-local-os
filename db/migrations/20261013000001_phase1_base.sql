@@ -98,7 +98,10 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_job_type_check
 -- 3. Systems
 -- ---------------------------------------------------------------------------
 -- Filled from the code's manifests by the worker and the console at start-up.
--- New systems arrive turned off unless they are required; a founder turns them on.
+-- New systems arrive turned off; a founder turns them on. A required system is on
+-- whatever its flag says ("on" everywhere means enabled OR required), and cannot be
+-- turned off. `required` comes from the manifest and never changes `enabled`, so a
+-- non-founder cannot turn a system on by toggling it.
 CREATE TABLE systems (
   key                 text PRIMARY KEY CHECK (key ~ '^[a-z][a-z0-9_]{1,39}$'),
   title               text NOT NULL,
@@ -108,8 +111,7 @@ CREATE TABLE systems (
   enabled_changed_by  uuid REFERENCES actors (id),
   enabled_changed_at  timestamptz,
   created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-  CHECK (enabled OR NOT required)
+  updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE FUNCTION systems_guard() RETURNS trigger
@@ -117,13 +119,11 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_actor uuid := ledger_current_actor_id();
 BEGIN
-  IF TG_OP = 'UPDATE' AND OLD.enabled AND NOT NEW.enabled AND NEW.required THEN
+  IF TG_OP = 'UPDATE' AND NEW.required AND OLD.enabled AND NOT NEW.enabled THEN
     RAISE EXCEPTION 'system % is required and cannot be turned off', NEW.key
       USING ERRCODE = 'check_violation';
   END IF;
-  IF NEW.required THEN
-    NEW.enabled := true;
-  ELSIF TG_OP = 'INSERT' AND NOT ledger_is_rule_writer(v_actor) THEN
+  IF TG_OP = 'INSERT' AND NOT ledger_is_rule_writer(v_actor) THEN
     NEW.enabled := false;
   ELSIF TG_OP = 'UPDATE' AND NEW.enabled IS DISTINCT FROM OLD.enabled
         AND NOT ledger_is_rule_writer(v_actor) THEN
@@ -259,8 +259,9 @@ BEGIN
 END $$;
 
 ALTER TABLE coaches
-  ADD COLUMN market_key           text NOT NULL REFERENCES markets (key),
-  ADD COLUMN vetting_standard_id  uuid,
+  ADD COLUMN market_key               text NOT NULL REFERENCES markets (key),
+  ADD COLUMN vetting_standard_id      uuid,
+  ADD COLUMN last_active_standard_id  uuid,
   ADD COLUMN postal_code          text CHECK (postal_code ~ '^[A-Za-z0-9 -]{3,10}$'),
   ADD COLUMN notes                text;
 ALTER TABLE leads ADD COLUMN market_key text NOT NULL REFERENCES markets (key);
@@ -396,6 +397,8 @@ CREATE TRIGGER vetting_item_types_draft_only BEFORE INSERT OR UPDATE OR DELETE O
 
 ALTER TABLE coaches ADD CONSTRAINT coaches_vetting_standard_fk
   FOREIGN KEY (vetting_standard_id) REFERENCES vetting_standards (id);
+ALTER TABLE coaches ADD CONSTRAINT coaches_last_active_standard_fk
+  FOREIGN KEY (last_active_standard_id) REFERENCES vetting_standards (id);
 
 -- vetting_items now refer to an item type of the coach's standard. item_type
 -- (the key) is kept and filled from the type, so either can be given.
@@ -408,9 +411,17 @@ DECLARE
   v_standard  uuid;
   v_type      vetting_item_types%ROWTYPE;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.coach_id <> OLD.coach_id THEN
+    RAISE EXCEPTION 'a vetting item cannot move to another coach' USING ERRCODE = 'check_violation';
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.item_type_id IS NOT DISTINCT FROM OLD.item_type_id
-     AND NEW.item_type IS NOT DISTINCT FROM OLD.item_type AND NEW.coach_id = OLD.coach_id THEN
+     AND NEW.item_type IS NOT DISTINCT FROM OLD.item_type THEN
     RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.verified_at IS NOT NULL
+     AND NOT ledger_is_founder(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder can change a verified vetting item'
+      USING ERRCODE = 'insufficient_privilege';
   END IF;
   SELECT vetting_standard_id INTO v_standard FROM coaches WHERE id = NEW.coach_id;
   IF v_standard IS NULL THEN
@@ -433,22 +444,50 @@ END $$;
 CREATE TRIGGER vetting_items_type BEFORE INSERT OR UPDATE ON vetting_items
   FOR EACH ROW EXECUTE FUNCTION vetting_items_type_guard();
 
--- A coach becomes active only by a founder's hand, under an active standard, with
--- every required item of that standard verified by a founder. A paused coach may
--- come back under the standard it was vetted on even if that has since been
--- retired. Entering vetting pins a standard: the active one, else the newest draft.
+-- A coach's status changes only by a founder's hand, along the roster's moves:
+--   prospect -> vetting | removed;  vetting -> active | prospect | removed;
+--   active -> paused | removed;     paused -> active | removed;  removed -> prospect.
+-- A system may add a coach, as a prospect only. A coach becomes active under an
+-- active standard with every required item of it verified by a founder; a paused
+-- coach may come back under the standard they were last active on even if it has
+-- since been retired. Entering vetting pins a standard: the active one, else the
+-- newest draft.
 CREATE OR REPLACE FUNCTION coaches_status_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
   v_actor            uuid := ledger_current_actor_id();
   v_missing          text[];
   v_standard_status  text;
+  v_activated_at     timestamptz;
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.vetting_standard_id IS NOT NULL
      AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id
      AND NOT ledger_is_founder(v_actor) THEN
     RAISE EXCEPTION 'only a founder can move a coach to another vetting standard'
       USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    NEW.last_active_standard_id := OLD.last_active_standard_id;
+  ELSE
+    NEW.last_active_standard_id := NULL;
+  END IF;
+  IF (TG_OP = 'INSERT' AND NEW.status <> 'prospect')
+     OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status) THEN
+    IF NOT ledger_is_founder(v_actor) THEN
+      RAISE EXCEPTION 'only a founder can change a coach''s status'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF (TG_OP = 'INSERT' AND NEW.status NOT IN ('prospect', 'vetting'))
+       OR (TG_OP = 'UPDATE' AND NOT (OLD.status, NEW.status) IN (
+            ('prospect', 'vetting'), ('prospect', 'removed'),
+            ('vetting', 'active'), ('vetting', 'prospect'), ('vetting', 'removed'),
+            ('active', 'paused'), ('active', 'removed'),
+            ('paused', 'active'), ('paused', 'removed'),
+            ('removed', 'prospect'))) THEN
+      RAISE EXCEPTION 'a coach cannot go from % to %',
+        CASE WHEN TG_OP = 'INSERT' THEN 'nothing' ELSE OLD.status END, NEW.status
+        USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   IF NEW.status IN ('vetting', 'active') AND NEW.vetting_standard_id IS NULL THEN
     SELECT id INTO NEW.vetting_standard_id FROM vetting_standards
@@ -461,12 +500,12 @@ BEGIN
     RETURN NEW;
   END IF;
   IF NEW.status = 'active' THEN
-    IF NOT ledger_is_founder(v_actor) THEN
-      RAISE EXCEPTION 'only a founder can mark a coach active' USING ERRCODE = 'insufficient_privilege';
-    END IF;
-    SELECT status INTO v_standard_status FROM vetting_standards WHERE id = NEW.vetting_standard_id;
+    SELECT status, activated_at INTO v_standard_status, v_activated_at
+      FROM vetting_standards WHERE id = NEW.vetting_standard_id;
     IF v_standard_status IS DISTINCT FROM 'active'
-       AND NOT (TG_OP = 'UPDATE' AND OLD.status = 'paused' AND v_standard_status = 'retired') THEN
+       AND NOT (TG_OP = 'UPDATE' AND OLD.status = 'paused' AND v_standard_status = 'retired'
+                AND v_activated_at IS NOT NULL
+                AND OLD.last_active_standard_id = NEW.vetting_standard_id) THEN
       RAISE EXCEPTION 'coach % cannot be active: its vetting standard is not active', NEW.id
         USING ERRCODE = 'check_violation';
     END IF;
@@ -481,6 +520,7 @@ BEGIN
       RAISE EXCEPTION 'coach % cannot be active: unverified vetting items %', NEW.id, v_missing
         USING ERRCODE = 'check_violation';
     END IF;
+    NEW.last_active_standard_id := NEW.vetting_standard_id;
   END IF;
   NEW.status_changed_by := v_actor;
   NEW.status_changed_at := now();
@@ -589,7 +629,8 @@ CREATE TRIGGER console_sessions_updated_at BEFORE UPDATE ON console_sessions
 -- ---------------------------------------------------------------------------
 DROP TRIGGER coaches_events ON coaches;
 CREATE TRIGGER coaches_events AFTER INSERT OR UPDATE OR DELETE ON coaches
-  FOR EACH ROW EXECUTE FUNCTION ledger_log_change('id', 'legal_name', 'email', 'phone', 'notes');
+  FOR EACH ROW EXECUTE FUNCTION ledger_log_change('id', 'display_name', 'legal_name', 'email',
+    'phone', 'website', 'home_area', 'postal_code', 'profile_summary', 'notes');
 
 DO $$
 DECLARE
@@ -645,7 +686,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT (ledger_setting('core.stale_job_alert_hours', '4') #>> '{}')::numeric AS hours,
            (ledger_setting('core.stale_job_alert_repeat_minutes', '240') #>> '{}')::integer AS repeat_min
   ), paused AS (
-    SELECT t.job_type FROM system_job_types t JOIN systems s ON s.key = t.system_key WHERE NOT s.enabled
+    SELECT t.job_type FROM system_job_types t JOIN systems s ON s.key = t.system_key
+     WHERE NOT (s.enabled OR s.required)
   ), oldest AS (
     SELECT id, job_type, (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
       FROM jobs
@@ -687,6 +729,8 @@ GRANT INSERT, UPDATE ON settings, markets, market_need_states, vetting_standards
                         vetting_item_types, vetting_evidence
   TO ledger_console;
 GRANT DELETE ON vetting_item_types, coach_need_states TO ledger_console;
+-- Vetting files and a coach's need-states are founder work, done in the console.
+REVOKE INSERT, UPDATE ON vetting_items, coach_need_states FROM ledger_worker;
 -- Console logins and sessions are for the console alone.
 GRANT SELECT, INSERT, UPDATE ON console_users, console_sessions TO ledger_console;
 
@@ -694,6 +738,7 @@ GRANT SELECT, INSERT, UPDATE ON console_users, console_sessions TO ledger_consol
 
 REVOKE ALL ON console_users, console_sessions FROM ledger_console;
 REVOKE DELETE ON coach_need_states FROM ledger_console;
+GRANT INSERT, UPDATE ON vetting_items, coach_need_states TO ledger_worker;
 
 DROP FUNCTION api.queue_health(integer);
 CREATE FUNCTION api.queue_health(
@@ -785,7 +830,9 @@ DROP TRIGGER leads_default_market ON leads;
 DROP TRIGGER ads_default_market ON ads;
 DROP INDEX coaches_market_status;
 ALTER TABLE coaches DROP CONSTRAINT coaches_vetting_standard_fk;
+ALTER TABLE coaches DROP CONSTRAINT coaches_last_active_standard_fk;
 ALTER TABLE coaches DROP COLUMN market_key, DROP COLUMN vetting_standard_id,
+                    DROP COLUMN last_active_standard_id,
                     DROP COLUMN postal_code, DROP COLUMN notes;
 ALTER TABLE leads DROP COLUMN market_key;
 ALTER TABLE ads DROP COLUMN market_key;

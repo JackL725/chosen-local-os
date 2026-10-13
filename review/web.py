@@ -164,7 +164,7 @@ def _read_flash(request: Request) -> tuple[str | None, str]:
 
 
 def _nav(page: Page) -> list[dict[str, str]]:
-    enabled = {r["key"] for r in page.query("SELECT key FROM systems WHERE enabled")}
+    enabled = {r["key"] for r in page.query("SELECT key FROM systems WHERE enabled OR required")}
     return [item for item in state(page.request).nav if item["system"] in enabled]
 
 
@@ -235,10 +235,13 @@ def _run(
         m = _SYSTEM_PATH.match(request.url.path)
         if m:
             with conn.cursor() as cur:
-                cur.execute("SELECT enabled FROM systems WHERE key = %s", (m.group(1),))
+                cur.execute(
+                    "SELECT enabled OR required AS is_on FROM systems WHERE key = %s",
+                    (m.group(1),),
+                )
                 row = cur.fetchone()
             conn.commit()
-            if not row or not row["enabled"]:
+            if not row or not row["is_on"]:
                 return _plain(request, 404, "That system is turned off. Turn it on under Systems.")
         p = Page(request, founder, conn, form, csrf, flash, flash_kind)
         try:

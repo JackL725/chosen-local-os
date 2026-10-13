@@ -30,8 +30,10 @@ def console_settings(db_url: str, tmp_path: Path):
 
     private = tmp_path / "private"
     private.mkdir()
+    from tests.conftest import login_url
+
     return ConsoleSettings(
-        console_database_url=db_url,
+        console_database_url=login_url(db_url, "ledger_console"),  # like cl_console
         private_data_dir=private,
         console_allow_local_signin=True,
     )
@@ -43,11 +45,11 @@ def alerts() -> list[str]:
 
 
 @pytest.fixture
-def founders(db_url: str) -> None:
+def founders(console_settings) -> None:
     from review import admin
     from worker.db import connect
 
-    with connect(db_url) as conn:
+    with connect(console_settings.console_database_url) as conn:
         admin.create_user(
             conn, "sam", tailscale_login=SAM, allow_local=False, prompt=lambda _p: PASSWORD
         )

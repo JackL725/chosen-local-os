@@ -1,5 +1,6 @@
-"""Review console configuration, from the environment the systemd unit provides
-(EnvironmentFile=/home/clworker/.config/chosen-local/worker.env)."""
+"""Review console configuration, from the environment the systemd unit provides:
+worker.env for shared values and console.env for the console's own login, which no other
+service can read (deploy/systemd/*.service InaccessiblePaths=)."""
 
 from __future__ import annotations
 

@@ -32,8 +32,21 @@ build differs from the sections below, this list wins:
   system, not a database rule.
 - **An active coach's file cannot be un-verified**; pause the coach first.
 - **The console login** is `cl_console`, created by `deploy/postgres/create_console_login.sh`
-  (rerunning `create_logins.sh` would rotate every login). `REVIEW_CONSOLE_SECRET` is gone;
-  sessions live in the Ledger.
+  (rerunning `create_logins.sh` would rotate every login). It lives in its own `console.env`,
+  loaded only by `cl-review`; every other `clworker` service is denied the file by systemd
+  `InaccessiblePaths=`. `REVIEW_CONSOLE_SECRET` is gone; sessions live in the Ledger.
+- **Independent review** (a separate agent, after 1e) found eight holes, now closed with a
+  regression test each in `tests/db/test_review_findings.py` and alongside: the worker could
+  read the console's login; the worker could move verified vetting items between coaches;
+  status changes were not founder-only (and a never-active coach could return under a retired
+  standard); toggling `required` turned a system on; coach names went into event payloads;
+  parallel wrong passwords were under-counted; readiness listed missing items once per
+  need-state; a bootstrap rerun restored draft items a founder had deleted. Also fixed: the
+  contract checker missed aliased database connections; console tests now run through a real
+  console login; a SIGTERM before a slot starts is no longer lost.
+- **Remaining exposure:** any process run as `clworker` outside these systemd units (for
+  example `sudo -u clworker` by hand) can still read `console.env`. Running the console as its
+  own Unix user would close that; not done, because it means splitting `cl-private` access.
 - **`uv.lock` was not regenerated** (no package index where it was built). Run `uv lock` before
   deploying (`deploy/PHASE1.md` L2). CI resolves fresh each run, so it is unaffected.
 - **Local verification** ran on Python 3.13 with ruff 0.16.8 and a real Postgres 16.15; CI runs

@@ -82,7 +82,7 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
 
 - **Where:** `https://<workstation tailnet name>:8443` from a founder device (Tailscale Serve on
   Windows → `127.0.0.1:8090` in WSL); `http://localhost:8090` on the workstation itself (Jack only:
-  his login has `--allow-local` and `CONSOLE_ALLOW_LOCAL_SIGNIN=true` is in `worker.env`).
+  his login has `--allow-local` and `CONSOLE_ALLOW_LOCAL_SIGNIN=true` is in `console.env`).
 - **Start / stop / restart:** `sudo systemctl restart cl-review`. **Health:** `curl -s 127.0.0.1:8090/healthz`.
 - **Logs:** `journalctl -u cl-review -n 50 --no-pager`. Requests are never logged; you will see
   start-up, sign-in outcomes (no names) and error classes.
@@ -101,9 +101,11 @@ SELECT id, job_type, attempts, error_class, finished_at FROM jobs WHERE status =
   sign-out, on a password change, or if the Tailscale identity changes. Sign in again.
 - **"The Ledger refused that: …":** a database rule said no (for example, activating a coach
   under a draft standard). The message is the rule; nothing was saved.
-- **Database login:** the console uses `cl_console` (`CONSOLE_DATABASE_URL`), the only login that
-  may act as a founder. Rotate it with `deploy/postgres/create_console_login.sh` on the VPS, update
-  `worker.env`, restart `cl-review`.
+- **Database login:** the console uses `cl_console` (`CONSOLE_DATABASE_URL` in
+  `/home/clworker/.config/chosen-local/console.env`), the only login that may act as a founder.
+  Only `cl-review` loads that file; systemd hides it from the worker, llama-server and the backup
+  units (`InaccessiblePaths=`). Never copy it into `worker.env`. Rotate it with
+  `deploy/postgres/create_console_login.sh` on the VPS, update `console.env`, restart `cl-review`.
 
 ## Systems, settings and rules
 

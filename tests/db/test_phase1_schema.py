@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
 
 import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from tests.conftest import TEST_MARKET
+from tests.conftest import TEST_MARKET, login_url
 from worker import bootstrap
 
 pytestmark = pytest.mark.db
@@ -17,7 +16,6 @@ pytestmark = pytest.mark.db
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = ROOT / "deploy" / "business" / "chosen-local.toml"
 NORTHWIND = ROOT / "tests" / "fixtures" / "business" / "northwind.toml"
-TEST_LOGIN_PASSWORD = "test-only-login"
 
 
 def as_actor(conn: psycopg.Connection, actor: str) -> None:
@@ -30,24 +28,8 @@ def raw(db_url: str):
         yield c
 
 
-def _login(raw, db_url: str, group: str) -> str:
-    """A real login in `group`, like cl_worker or cl_console in production."""
-    name = f"t_{group}"
-    raw.execute(
-        f"""DO $$ BEGIN
-              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{name}') THEN
-                CREATE ROLE {name} LOGIN PASSWORD '{TEST_LOGIN_PASSWORD}';
-              END IF;
-            END $$"""
-    )
-    raw.execute(f"GRANT {group} TO {name}")
-    u = urlparse(db_url)
-    netloc = f"{name}:{TEST_LOGIN_PASSWORD}@{u.hostname}" + (f":{u.port}" if u.port else "")
-    return urlunparse(u._replace(netloc=netloc))
-
-
 def _connect_as(raw, db_url: str, group: str) -> psycopg.Connection:
-    return psycopg.connect(_login(raw, db_url, group), autocommit=True, row_factory=dict_row)
+    return psycopg.connect(login_url(db_url, group), autocommit=True, row_factory=dict_row)
 
 
 # --------------------------------------------------------------- login -> actor guard
@@ -165,11 +147,12 @@ def test_systems_arrive_off_and_required_systems_cannot_be_turned_off(raw):
         "INSERT INTO systems (key, title, version, required) VALUES ('guard', 'Guard', 1, true)"
     )
     rows = {
-        r["key"]: r["enabled"] for r in raw.execute("SELECT key, enabled FROM systems").fetchall()
+        r["key"]: r["is_on"]
+        for r in raw.execute("SELECT key, enabled OR required AS is_on FROM systems").fetchall()
     }
-    assert rows == {"demo": False, "guard": True}
+    assert rows == {"demo": False, "guard": True}  # "on" means enabled or required
     as_actor(raw, "sam")
-    raw.execute("UPDATE systems SET enabled = true WHERE key = 'demo'")
+    raw.execute("UPDATE systems SET enabled = true WHERE key IN ('demo', 'guard')")
     with pytest.raises(psycopg.errors.CheckViolation, match="required"):
         raw.execute("UPDATE systems SET enabled = false WHERE key = 'guard'")
     as_actor(raw, "worker")

@@ -337,6 +337,26 @@ def test_coach_details_never_reach_logs_or_events(client, ledger, seeded, sentin
         ).fetchall()
     )
     assert ledger.execute("SELECT count(*) AS n FROM vetting_evidence").fetchone()["n"] == 2
-    for s in (email, notes, note, file_name):
+    for s in (name, email, notes, note, file_name):
         assert s not in buf.getvalue() and s not in events
-    assert name not in buf.getvalue()
+
+
+def test_readiness_lists_each_missing_item_once(client, ledger, seeded):
+    from systems.coaches import service
+
+    ledger.execute("SELECT set_config('app.actor', 'sam', false)")
+    cid = ledger.execute(
+        "INSERT INTO coaches (display_name, status) VALUES ('Two States', 'vetting') RETURNING id"
+    ).fetchone()["id"]
+    for ns in ("fitness", "career"):
+        ledger.execute(
+            "INSERT INTO coach_need_states (coach_id, need_state_key) VALUES (%s, %s)", (cid, ns)
+        )
+    for key in ("interview", "reference", "agreement"):
+        ledger.execute(
+            "INSERT INTO vetting_items (coach_id, item_type) VALUES (%s, %s)", (cid, key)
+        )
+    data = service.readiness(ledger, 2)
+    row = next(v for v in data["vetting"] if v["id"] == cid)
+    assert row["missing"] == ["Interview", "Reference", "Agreement"]
+    assert row["need_states"] == ["career", "fitness"]

@@ -100,7 +100,8 @@ def claim(conn: psycopg.Connection, worker_id: str, lease_s: int) -> Job | None:
                                AND NOT EXISTS (
                                      SELECT 1 FROM system_job_types t
                                        JOIN systems s ON s.key = t.system_key
-                                      WHERE t.job_type = j.job_type AND NOT s.enabled)
+                                      WHERE t.job_type = j.job_type
+                                        AND NOT (s.enabled OR s.required))
                              ORDER BY j.priority, j.run_after
                              FOR UPDATE OF j SKIP LOCKED
                              LIMIT 1)

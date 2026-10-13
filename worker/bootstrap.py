@@ -9,7 +9,8 @@ On the VPS, pipe the printed SQL into psql as the database owner (docs/runbook.m
 from the VPS checkout without the project's virtualenv.
 
 Idempotent and conservative: it adds what is missing and never overwrites what a founder
-has since changed in the console (labels, descriptions, launches, settings). The one
+has since changed in the console (labels, descriptions, launches, settings, and the items
+of a vetting standard once that standard exists). The one
 exception is founders: the profile is the list of founders, so an active founder the
 profile does not name is deactivated. A new business's install uses that to retire the
 two founders the first migration seeds.
@@ -159,23 +160,32 @@ def to_sql(p: dict[str, Any]) -> str:
 
     vs = p.get("vetting_standard")
     if vs:
-        out += ["", "-- The draft vetting standard. Items are added only while it is a draft."]
-        out.append(
-            "INSERT INTO vetting_standards (version, title) VALUES "
-            f"({_lit(vs['version'])}, {_lit(vs['title'])})\n"
-            "  ON CONFLICT (version) DO NOTHING;"
+        out += [
+            "",
+            "-- The draft vetting standard, with its items, only if this version does not",
+            "-- exist yet. Once it exists it belongs to the founders: a rerun never adds back",
+            "-- an item they removed.",
+        ]
+        rows = ",\n    ".join(
+            f"({_lit(item['key'])}, {_lit(item['label'])}, {_lit(item.get('description'))}, "
+            f"{_lit(item.get('evidence_kind', 'any'))}, {_lit(bool(item.get('required', True)))}, "
+            f"{_lit((i + 1) * 10)})"
+            for i, item in enumerate(vs["items"])
         )
-        for i, item in enumerate(vs["items"]):
-            out.append(
-                "INSERT INTO vetting_item_types\n"
-                "    (standard_id, key, label, description, evidence_kind, required, sort_order)\n"
-                f"  SELECT s.id, {_lit(item['key'])}, {_lit(item['label'])}, "
-                f"{_lit(item.get('description'))}, {_lit(item.get('evidence_kind', 'any'))}, "
-                f"{_lit(bool(item.get('required', True)))}, {_lit((i + 1) * 10)}\n"
-                f"    FROM vetting_standards s WHERE s.version = {_lit(vs['version'])} "
-                "AND s.status = 'draft'\n"
-                "  ON CONFLICT (standard_id, key) DO NOTHING;"
-            )
+        out.append(
+            "WITH created AS (\n"
+            "  INSERT INTO vetting_standards (version, title) VALUES "
+            f"({_lit(vs['version'])}, {_lit(vs['title'])})\n"
+            "  ON CONFLICT (version) DO NOTHING RETURNING id\n"
+            ")\n"
+            "INSERT INTO vetting_item_types\n"
+            "    (standard_id, key, label, description, evidence_kind, required, sort_order)\n"
+            "SELECT created.id, i.key, i.label, i.description, i.evidence_kind, i.required,"
+            " i.sort_order\n"
+            "  FROM created CROSS JOIN (VALUES\n"
+            f"    {rows}\n"
+            "  ) AS i (key, label, description, evidence_kind, required, sort_order);"
+        )
     out += ["", "COMMIT;", ""]
     return "\n".join(out)
 

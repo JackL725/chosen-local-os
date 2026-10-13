@@ -191,7 +191,7 @@ def _standard(raw, items=ITEMS, *, activate: bool = True) -> str:
 def test_coach_cannot_go_active_until_every_item_is_founder_verified(raw):
     _standard(raw)
     coach = _coach(raw)
-    as_actor(raw, "worker")
+    as_actor(raw, "sam")
     raw.execute("UPDATE coaches SET status = 'vetting' WHERE id = %s", (coach,))
     as_actor(raw, "sam")
     for item in ITEMS[:-1]:

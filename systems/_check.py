@@ -30,7 +30,6 @@ ROOT = Path(__file__).resolve().parent.parent
 _SETTING_TYPES = {"int", "number", "bool", "text", "choice"}
 _DATA_CLASSES = {"none", "public", "founder_brief", "coach", "prospect"}
 _FORBIDDEN_CALLS = {
-    ("psycopg", "connect"): "opens its own database connection",
     ("logging", "basicConfig"): "configures logging",
 }
 
@@ -189,12 +188,34 @@ def _check_code(key: str, folder: Path) -> list[str]:
                     "systems._contract",
                 ):
                     out.append(f"{key}: {rel} may import only from systems._contract")
+        # Names bound to the psycopg module (import psycopg / import psycopg as pg).
+        pg_names = {"psycopg"}
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "worker.db":
-                if any(a.name == "connect" for a in node.names):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name == "psycopg":
+                        pg_names.add(a.asname or "psycopg")
+                    if a.name.split(".")[0] == "psycopg_pool":
+                        out.append(f"{key}: {rel} opens its own database connection")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                names = {a.name for a in node.names}
+                if (mod == "worker.db" and "connect" in names) or mod.startswith("psycopg_pool"):
+                    out.append(f"{key}: {rel} opens its own database connection")
+                if mod.split(".")[0] == "psycopg" and "connect" in names:
                     out.append(f"{key}: {rel} opens its own database connection")
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 base = node.func.value
+                root = base
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if (
+                    node.func.attr == "connect"
+                    and isinstance(root, ast.Name)
+                    and root.id in pg_names
+                ):
+                    out.append(f"{key}: {rel} opens its own database connection")
                 if isinstance(base, ast.Name):
                     why = _FORBIDDEN_CALLS.get((base.id, node.func.attr))
                     if why:

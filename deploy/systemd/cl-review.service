@@ -10,6 +10,8 @@ User=clworker
 Group=clworker
 WorkingDirectory=/opt/chosen-local
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
+# The console's own login (cl_console). No other service can read this file.
+EnvironmentFile=/home/clworker/.config/chosen-local/console.env
 ExecStart=/opt/chosen-local/.venv/bin/python -m review
 Restart=always
 RestartSec=5

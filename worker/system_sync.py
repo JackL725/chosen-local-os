@@ -39,7 +39,7 @@ def sync_systems(conn: psycopg.Connection, *, actor: str = "worker") -> None:
 
 def enabled_systems(conn: psycopg.Connection) -> set[str]:
     with conn.cursor() as cur:
-        cur.execute("SELECT key FROM systems WHERE enabled")
+        cur.execute("SELECT key FROM systems WHERE enabled OR required")
         rows = cur.fetchall()
     conn.commit()
     return {r["key"] for r in rows}

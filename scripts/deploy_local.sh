@@ -81,6 +81,15 @@ if [ ! -f "$ENVFILE" ]; then
   exit 0
 fi
 chown clworker:clworker "$ENVFILE"; chmod 600 "$ENVFILE"
+CONSOLE_ENV=/home/clworker/.config/chosen-local/console.env
+if [ ! -f "$CONSOLE_ENV" ]; then
+  install -o clworker -g clworker -m 600 "$DEST/deploy/console.env.example" "$CONSOLE_ENV"
+  echo
+  echo "Created $CONSOLE_ENV from the example (names only)."
+  echo "Fill in the values (deploy/PHASE1.md, workstation step W2), then run this script again."
+  exit 0
+fi
+chown clworker:clworker "$CONSOLE_ENV"; chmod 600 "$CONSOLE_ENV"
 
 # --- 6. restart -------------------------------------------------------------------
 systemctl restart llama-server.service cl-review.service

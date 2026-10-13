@@ -58,7 +58,7 @@ def home(page: web.Page) -> Response:
     )
     threshold = business_settings.get(page.conn, "core.stale_job_alert_hours")
     page.conn.commit()
-    off = page.query("SELECT key, title FROM systems WHERE NOT enabled ORDER BY key")
+    off = page.query("SELECT key, title FROM systems WHERE NOT (enabled OR required) ORDER BY key")
     return page.render(
         "home.html",
         queue=queue,
@@ -80,7 +80,7 @@ def systems_index(page: web.Page) -> Response:
             {
                 "manifest": m,
                 "registered": row is not None,
-                "enabled": bool(row and row["enabled"]),
+                "enabled": bool(row and (row["enabled"] or row["required"])),
                 "changed_at": row["enabled_changed_at"] if row else None,
                 "models": [
                     (u.name, u.profile, MODEL_PROFILES.get(u.profile, "?")) for u in m.models

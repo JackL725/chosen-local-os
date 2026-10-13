@@ -51,16 +51,19 @@ DC="sudo docker compose -f /opt/chosen-local-vps/deploy/compose.prod.yml --env-f
 
 ## W. Workstation (WSL)
 
-1. **Deploy:** from your checkout, `sudo scripts/deploy_local.sh`.
-2. **worker.env:** `sudo nano /home/clworker/.config/chosen-local/worker.env` and add:
+1. **Deploy:** from your checkout, `sudo scripts/deploy_local.sh`. The first run of Phase 1
+   creates `/home/clworker/.config/chosen-local/console.env` from the example and stops.
+2. **console.env** (only the console reads it; systemd hides it from every other service):
+   `sudo nano /home/clworker/.config/chosen-local/console.env`
    ```
    CONSOLE_DATABASE_URL=postgres://cl_console:<password from V5>@<VPS Tailscale IP>:5432/ledger?sslmode=disable
    CONSOLE_ALLOW_LOCAL_SIGNIN=true
    CONSOLE_MAX_UPLOAD_MB=500
-   WORKER_CONCURRENCY=4
    ```
-   `WORKER_CONCURRENCY` should equal `LLAMA_PARALLEL` (4). You can delete `REVIEW_CONSOLE_SECRET`;
-   sessions now live in the Ledger.
+   **Do not** put `CONSOLE_DATABASE_URL` in `worker.env`. That login may act as a founder, and
+   the worker must never hold it. In `worker.env`, add `WORKER_CONCURRENCY=4` (equal to
+   `LLAMA_PARALLEL`). You can delete `REVIEW_CONSOLE_SECRET`; sessions now live in the Ledger.
+   Then run `sudo scripts/deploy_local.sh` again.
 3. `sudo systemctl restart cl-worker cl-review` and check `systemctl is-active cl-worker cl-review`
    and `curl -s 127.0.0.1:8090/healthz`.
 
@@ -92,7 +95,7 @@ DC="sudo docker compose -f /opt/chosen-local-vps/deploy/compose.prod.yml --env-f
 | A2 | Ten parallel jobs | With llama-server up, in your checkout: `set -a; . ./.env; set +a`; turn on Health check in the dev Ledger (dev console, or `psql "$DATABASE_URL" -c "SELECT set_config('app.actor','jack',false); UPDATE systems SET enabled = true WHERE key = 'healthcheck'"` after starting the dev worker once); run `WORKER_CONCURRENCY=4 uv run python -m worker` in one terminal and `uv run python scripts/load_check.py --jobs 10` in another | `result=PASS`, `succeeded=10`; record `wall_s` and `job_ms_median` in `docs/integrations.md` |
 | A3 | A coach moves prospect → vetting → active only by founders | In the production console, add "Test Coach", start vetting, add a note to each item, verify them, try **Mark active** (refused while the standard is a draft), activate the standard, mark the coach active; open **history** | every row in history shows you or Sam; nothing shows `worker` or `n8n` |
 | A4 | A missing item blocks activation | Pause Test Coach, add a new draft standard with one extra item, activate it, move Test Coach to it, try **Mark active** | refused, naming the missing item. Then **Remove** Test Coach |
-| A5 | The worker cannot act as a founder | On the workstation: `psql "postgres://cl_worker:<pw>@<VPS IP>:5432/ledger" -c "SELECT set_config('app.actor','sam',false); INSERT INTO coaches (display_name) VALUES ('x')"` | `this database login may not act as a founder actor` |
+| A5 | The worker cannot act as a founder | On the workstation: `psql "postgres://cl_worker:<pw>@<VPS IP>:5432/ledger" -c "SELECT set_config('app.actor','sam',false); INSERT INTO coaches (display_name) VALUES ('x')"`; then `sudo systemd-run --pipe -p User=clworker -p InaccessiblePaths=/home/clworker/.config/chosen-local/console.env cat /home/clworker/.config/chosen-local/console.env` (what the worker's sandbox sees) | `this database login may not act as a founder actor`; the `cat` fails with "Permission denied" or "No such file" |
 | A6 | Console unreachable off the tailnet, and from tagged devices without a password | Phone with Tailscale off: the :8443 address does not load. Workstation browser at `http://localhost:8090` with no password: refused | both refused |
 | A7 | Evidence is backed up | Upload a small PDF to Test Coach before removing it; `sudo systemctl start cl-restic`; `sudo -u clworker bash -c 'set -a; . ~/.config/chosen-local/restic.env; restic ls latest' \| grep coaches/` | the file appears in the snapshot |
 | A8 | Services survive a restart | `wsl --shutdown` from Windows, wait for the Task Scheduler task, then `systemctl is-active llama-server cl-worker cl-review` | all three `active` |

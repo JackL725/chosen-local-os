@@ -127,14 +127,21 @@ def sign_in(
 
     uid = str(user["id"])
     if not passwords.verify(password, user["password_hash"]):
-        failed = user["failed_signins"] + 1
-        locked = failed >= int(settings["console.max_failed_signins"])
+        # Counted in one statement, so wrong guesses made in parallel are all counted.
         lock_until = now + timedelta(minutes=int(settings["console.lockout_minutes"]))
         with transaction(conn, actor=SYSTEM_ACTOR), conn.cursor() as cur:
             cur.execute(
-                """UPDATE console_users SET failed_signins = %s, locked_until = %s WHERE id = %s""",
-                (0 if locked else failed, lock_until if locked else None, uid),
+                """UPDATE console_users SET failed_signins = failed_signins + 1
+                    WHERE id = %s RETURNING failed_signins""",
+                (uid,),
             )
+            failed = cur.fetchone()["failed_signins"]
+            locked = failed >= int(settings["console.max_failed_signins"])
+            if locked:
+                cur.execute(
+                    "UPDATE console_users SET failed_signins = 0, locked_until = %s WHERE id = %s",
+                    (lock_until, uid),
+                )
         _emit(conn, SYSTEM_ACTOR, uid, "console.signin_failed", {"locked": locked})
         if locked:
             raise SignInRefused(
@@ -147,6 +154,11 @@ def sign_in(
     idle = timedelta(hours=int(settings["console.session_idle_hours"]))
     local = not tailscale_login
     with transaction(conn, actor=SYSTEM_ACTOR), conn.cursor() as cur:
+        # A lockout set by a parallel wrong guess while this password was checked still holds.
+        cur.execute("SELECT locked_until FROM console_users WHERE id = %s FOR UPDATE", (uid,))
+        row = cur.fetchone()
+        if row["locked_until"] is not None and row["locked_until"] > now:
+            raise SignInRefused("This account is locked for a few minutes after too many tries.")
         cur.execute(
             "UPDATE console_users SET failed_signins = 0, locked_until = NULL WHERE id = %s"
             " AND (failed_signins <> 0 OR locked_until IS NOT NULL)",

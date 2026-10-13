@@ -141,11 +141,27 @@ def test_checker_catches_code_violations(tmp_path: Path):
             """
         )
     )
-    (folder / "fine.py").write_text("from worker.db import transaction\n")
+    (folder / "fine.py").write_text(
+        "import psycopg\nfrom psycopg import Connection, sql\nfrom worker.db import transaction\n"
+    )
+    (folder / "sneaky.py").write_text(
+        textwrap.dedent(
+            """
+            import psycopg as pg
+            import psycopg_pool
+            from psycopg import connect
+
+            def bad():
+                pg.connect("x")
+                pg.Connection.connect("x")
+            """
+        )
+    )
     found = "\n".join(_check._check_code("demo", folder))
     assert "manifest.py is data only" in found
     assert "manifest.py may import only from systems._contract" in found
-    assert found.count("opens its own database connection") == 2
+    assert found.count("service.py opens its own database connection") == 2
+    assert found.count("sneaky.py opens its own database connection") == 4
     assert found.count("configures logging") >= 2
     assert "fine.py" not in found
 

@@ -6,7 +6,8 @@
     ... set-password sam | unlock sam | sign-out-everywhere sam | list
 
 Passwords are typed at a prompt, twice, and never passed on the command line or logged.
-Connects with CONSOLE_DATABASE_URL (the console's own login) as the review_console actor.
+Connects with CONSOLE_DATABASE_URL from console.env (the console's own login) as the
+review_console actor.
 """
 
 from __future__ import annotations

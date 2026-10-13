@@ -49,6 +49,7 @@ class Worker:
         self.host = socket.gethostname()
         self.started_at = datetime.now(UTC)
         self._stop = threading.Event()
+        self._stop_requested = False
         self._current_job_id: str | None = None
         self._lock = threading.Lock()
         self._ctx = JobContext(
@@ -57,6 +58,7 @@ class Worker:
 
     # ----------------------------------------------------------------- lifecycle
     def stop(self, *_: object) -> None:
+        self._stop_requested = True
         self._stop.set()
 
     def install_signal_handlers(self) -> None:
@@ -65,6 +67,8 @@ class Worker:
 
     def run(self, *, max_jobs: int | None = None, idle_exit: bool = False) -> int:
         """Run until stopped. Returns the number of jobs processed."""
+        if self._stop_requested:
+            return 0  # SIGTERM arrived before this slot started
         self._stop.clear()
         conn = self._connect(self.settings.database_url)
         sync_systems(conn)

@@ -119,3 +119,24 @@ def enable_systems(db_url: str, *keys: str) -> None:
         sync_systems(c)
         with transaction(c, actor="jack"):
             c.execute("UPDATE systems SET enabled = true WHERE key = ANY(%s)", (list(keys),))
+
+
+TEST_LOGIN_PASSWORD = "test-only-login"
+
+
+def login_url(db_url: str, group: str) -> str:
+    """A real login in `group` (like cl_worker or cl_console in production), so tests go
+    through the Ledger's login -> actor guard and grants, not the superuser."""
+    from urllib.parse import urlunparse
+
+    import psycopg
+
+    name = f"t_{group}"
+    with psycopg.connect(db_url, autocommit=True) as c:
+        exists = c.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (name,)).fetchone()
+        if not exists:
+            c.execute(f"CREATE ROLE {name} LOGIN PASSWORD '{TEST_LOGIN_PASSWORD}'")
+        c.execute(f"GRANT {group} TO {name}")
+    u = urlparse(db_url)
+    netloc = f"{name}:{TEST_LOGIN_PASSWORD}@{u.hostname}" + (f":{u.port}" if u.port else "")
+    return urlunparse(u._replace(netloc=netloc))

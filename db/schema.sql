@@ -70,7 +70,8 @@ CREATE FUNCTION api.queue_health(p_check_every_min integer DEFAULT 15) RETURNS T
     SELECT (ledger_setting('core.stale_job_alert_hours', '4') #>> '{}')::numeric AS hours,
            (ledger_setting('core.stale_job_alert_repeat_minutes', '240') #>> '{}')::integer AS repeat_min
   ), paused AS (
-    SELECT t.job_type FROM system_job_types t JOIN systems s ON s.key = t.system_key WHERE NOT s.enabled
+    SELECT t.job_type FROM system_job_types t JOIN systems s ON s.key = t.system_key
+     WHERE NOT (s.enabled OR s.required)
   ), oldest AS (
     SELECT id, job_type, (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
       FROM jobs
@@ -147,12 +148,36 @@ DECLARE
   v_actor            uuid := ledger_current_actor_id();
   v_missing          text[];
   v_standard_status  text;
+  v_activated_at     timestamptz;
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.vetting_standard_id IS NOT NULL
      AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id
      AND NOT ledger_is_founder(v_actor) THEN
     RAISE EXCEPTION 'only a founder can move a coach to another vetting standard'
       USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    NEW.last_active_standard_id := OLD.last_active_standard_id;
+  ELSE
+    NEW.last_active_standard_id := NULL;
+  END IF;
+  IF (TG_OP = 'INSERT' AND NEW.status <> 'prospect')
+     OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status) THEN
+    IF NOT ledger_is_founder(v_actor) THEN
+      RAISE EXCEPTION 'only a founder can change a coach''s status'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF (TG_OP = 'INSERT' AND NEW.status NOT IN ('prospect', 'vetting'))
+       OR (TG_OP = 'UPDATE' AND NOT (OLD.status, NEW.status) IN (
+            ('prospect', 'vetting'), ('prospect', 'removed'),
+            ('vetting', 'active'), ('vetting', 'prospect'), ('vetting', 'removed'),
+            ('active', 'paused'), ('active', 'removed'),
+            ('paused', 'active'), ('paused', 'removed'),
+            ('removed', 'prospect'))) THEN
+      RAISE EXCEPTION 'a coach cannot go from % to %',
+        CASE WHEN TG_OP = 'INSERT' THEN 'nothing' ELSE OLD.status END, NEW.status
+        USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   IF NEW.status IN ('vetting', 'active') AND NEW.vetting_standard_id IS NULL THEN
     SELECT id INTO NEW.vetting_standard_id FROM vetting_standards
@@ -165,12 +190,12 @@ BEGIN
     RETURN NEW;
   END IF;
   IF NEW.status = 'active' THEN
-    IF NOT ledger_is_founder(v_actor) THEN
-      RAISE EXCEPTION 'only a founder can mark a coach active' USING ERRCODE = 'insufficient_privilege';
-    END IF;
-    SELECT status INTO v_standard_status FROM vetting_standards WHERE id = NEW.vetting_standard_id;
+    SELECT status, activated_at INTO v_standard_status, v_activated_at
+      FROM vetting_standards WHERE id = NEW.vetting_standard_id;
     IF v_standard_status IS DISTINCT FROM 'active'
-       AND NOT (TG_OP = 'UPDATE' AND OLD.status = 'paused' AND v_standard_status = 'retired') THEN
+       AND NOT (TG_OP = 'UPDATE' AND OLD.status = 'paused' AND v_standard_status = 'retired'
+                AND v_activated_at IS NOT NULL
+                AND OLD.last_active_standard_id = NEW.vetting_standard_id) THEN
       RAISE EXCEPTION 'coach % cannot be active: its vetting standard is not active', NEW.id
         USING ERRCODE = 'check_violation';
     END IF;
@@ -185,6 +210,7 @@ BEGIN
       RAISE EXCEPTION 'coach % cannot be active: unverified vetting items %', NEW.id, v_missing
         USING ERRCODE = 'check_violation';
     END IF;
+    NEW.last_active_standard_id := NEW.vetting_standard_id;
   END IF;
   NEW.status_changed_by := v_actor;
   NEW.status_changed_at := now();
@@ -626,13 +652,11 @@ CREATE FUNCTION public.systems_guard() RETURNS trigger
 DECLARE
   v_actor uuid := ledger_current_actor_id();
 BEGIN
-  IF TG_OP = 'UPDATE' AND OLD.enabled AND NOT NEW.enabled AND NEW.required THEN
+  IF TG_OP = 'UPDATE' AND NEW.required AND OLD.enabled AND NOT NEW.enabled THEN
     RAISE EXCEPTION 'system % is required and cannot be turned off', NEW.key
       USING ERRCODE = 'check_violation';
   END IF;
-  IF NEW.required THEN
-    NEW.enabled := true;
-  ELSIF TG_OP = 'INSERT' AND NOT ledger_is_rule_writer(v_actor) THEN
+  IF TG_OP = 'INSERT' AND NOT ledger_is_rule_writer(v_actor) THEN
     NEW.enabled := false;
   ELSIF TG_OP = 'UPDATE' AND NEW.enabled IS DISTINCT FROM OLD.enabled
         AND NOT ledger_is_rule_writer(v_actor) THEN
@@ -769,9 +793,17 @@ DECLARE
   v_standard  uuid;
   v_type      vetting_item_types%ROWTYPE;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.coach_id <> OLD.coach_id THEN
+    RAISE EXCEPTION 'a vetting item cannot move to another coach' USING ERRCODE = 'check_violation';
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.item_type_id IS NOT DISTINCT FROM OLD.item_type_id
-     AND NEW.item_type IS NOT DISTINCT FROM OLD.item_type AND NEW.coach_id = OLD.coach_id THEN
+     AND NEW.item_type IS NOT DISTINCT FROM OLD.item_type THEN
     RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.verified_at IS NOT NULL
+     AND NOT ledger_is_founder(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder can change a verified vetting item'
+      USING ERRCODE = 'insufficient_privilege';
   END IF;
   SELECT vetting_standard_id INTO v_standard FROM coaches WHERE id = NEW.coach_id;
   IF v_standard IS NULL THEN
@@ -1085,6 +1117,7 @@ CREATE TABLE public.coaches (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     market_key text NOT NULL,
     vetting_standard_id uuid,
+    last_active_standard_id uuid,
     postal_code text,
     notes text,
     CONSTRAINT coaches_capacity_open_check CHECK ((capacity_open >= 0)),
@@ -1567,7 +1600,6 @@ CREATE TABLE public.systems (
     enabled_changed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT systems_check CHECK ((enabled OR (NOT required))),
     CONSTRAINT systems_key_check CHECK ((key ~ '^[a-z][a-z0-9_]{1,39}$'::text)),
     CONSTRAINT systems_version_check CHECK ((version >= 1))
 );
@@ -2419,7 +2451,7 @@ CREATE TRIGGER coaches_default_market BEFORE INSERT ON public.coaches FOR EACH R
 -- Name: coaches coaches_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER coaches_events AFTER INSERT OR DELETE OR UPDATE ON public.coaches FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'legal_name', 'email', 'phone', 'notes');
+CREATE TRIGGER coaches_events AFTER INSERT OR DELETE OR UPDATE ON public.coaches FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'display_name', 'legal_name', 'email', 'phone', 'website', 'home_area', 'postal_code', 'profile_summary', 'notes');
 
 
 --
@@ -3036,6 +3068,14 @@ ALTER TABLE ONLY public.coach_need_states
 
 ALTER TABLE ONLY public.coach_need_states
     ADD CONSTRAINT coach_need_states_need_state_key_fkey FOREIGN KEY (need_state_key) REFERENCES public.need_states(key);
+
+
+--
+-- Name: coaches coaches_last_active_standard_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coaches
+    ADD CONSTRAINT coaches_last_active_standard_fk FOREIGN KEY (last_active_standard_id) REFERENCES public.vetting_standards(id);
 
 
 --

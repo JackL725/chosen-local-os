@@ -34,9 +34,11 @@ def main(argv: list[str] | None = None) -> int:
         print("load_check_error=DATABASE_URL is not set")
         return 2
     with connect(url) as conn:
-        row = conn.execute("SELECT enabled FROM systems WHERE key = 'healthcheck'").fetchone()
+        row = conn.execute(
+            "SELECT enabled OR required AS is_on FROM systems WHERE key = 'healthcheck'"
+        ).fetchone()
         conn.commit()
-        if not row or not row["enabled"]:
+        if not row or not row["is_on"]:
             print("load_check_error=turn the healthcheck system on in the console first")
             return 2
         started = time.monotonic()
