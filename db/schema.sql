@@ -59,32 +59,42 @@ END $$;
 
 
 --
--- Name: queue_health(numeric, integer, integer); Type: FUNCTION; Schema: api; Owner: -
+-- Name: queue_health(integer); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION api.queue_health(p_threshold_hours numeric, p_check_every_min integer DEFAULT 15, p_repeat_minutes integer DEFAULT 240) RETURNS TABLE(oldest_pending_job_id uuid, oldest_pending_job_type text, oldest_pending_age_min integer, pending_count integer, failed_last_24h integer, newest_heartbeat_age_min integer, is_stale boolean, should_alert boolean)
+CREATE FUNCTION api.queue_health(p_check_every_min integer DEFAULT 15) RETURNS TABLE(oldest_pending_job_id uuid, oldest_pending_job_type text, oldest_pending_age_min integer, pending_count integer, paused_pending_count integer, failed_last_24h integer, newest_heartbeat_age_min integer, threshold_hours numeric, is_stale boolean, should_alert boolean)
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
-  WITH oldest AS (
-    SELECT id, job_type, run_after,
-           (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
+  WITH cfg AS (
+    SELECT (ledger_setting('core.stale_job_alert_hours', '4') #>> '{}')::numeric AS hours,
+           (ledger_setting('core.stale_job_alert_repeat_minutes', '240') #>> '{}')::integer AS repeat_min
+  ), paused AS (
+    SELECT t.job_type FROM system_job_types t JOIN systems s ON s.key = t.system_key
+     WHERE NOT (s.enabled OR s.required)
+  ), oldest AS (
+    SELECT id, job_type, (extract(epoch FROM now() - run_after) / 60)::integer AS age_min
       FROM jobs
      WHERE status = 'pending' AND run_after <= now()
+       AND job_type NOT IN (SELECT job_type FROM paused)
      ORDER BY run_after LIMIT 1
   ), hb AS (
     SELECT max(last_seen_at) AS last_seen FROM worker_heartbeats
   ), s AS (
-    SELECT o.*, hb.last_seen, (p_threshold_hours * 60)::integer AS threshold_min
-      FROM hb LEFT JOIN oldest o ON true
+    SELECT o.*, hb.last_seen, cfg.hours, (cfg.hours * 60)::integer AS threshold_min, cfg.repeat_min
+      FROM cfg CROSS JOIN hb LEFT JOIN oldest o ON true
   )
   SELECT s.id, s.job_type, s.age_min,
-         (SELECT count(*) FROM jobs WHERE status = 'pending')::integer,
+         (SELECT count(*) FROM jobs WHERE status = 'pending'
+             AND job_type NOT IN (SELECT job_type FROM paused))::integer,
+         (SELECT count(*) FROM jobs WHERE status = 'pending'
+             AND job_type IN (SELECT job_type FROM paused))::integer,
          (SELECT count(*) FROM jobs WHERE status = 'failed' AND finished_at > now() - interval '24 hours')::integer,
          (extract(epoch FROM now() - s.last_seen) / 60)::integer,
+         s.hours,
          coalesce(s.age_min >= s.threshold_min, false),
          coalesce(s.age_min >= s.threshold_min
-                  AND (s.age_min - s.threshold_min) % greatest(p_repeat_minutes, 1) < p_check_every_min,
+                  AND (s.age_min - s.threshold_min) % greatest(s.repeat_min, 1) < p_check_every_min,
                   false)
     FROM s
 $$;
@@ -135,32 +145,95 @@ CREATE FUNCTION public.coaches_status_guard() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 DECLARE
-  v_actor    uuid := ledger_current_actor_id();
-  v_missing  text[];
+  v_actor            uuid := ledger_current_actor_id();
+  v_missing          text[];
+  v_standard_status  text;
+  v_activated_at     timestamptz;
 BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.vetting_standard_id IS NOT NULL
+     AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id
+     AND NOT ledger_is_founder(v_actor) THEN
+    RAISE EXCEPTION 'only a founder can move a coach to another vetting standard'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'active' AND NEW.status = 'active'
+     AND NEW.vetting_standard_id IS DISTINCT FROM OLD.vetting_standard_id THEN
+    RAISE EXCEPTION 'pause the coach before moving them to another vetting standard'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    NEW.last_active_standard_id := OLD.last_active_standard_id;
+  ELSE
+    NEW.last_active_standard_id := NULL;
+  END IF;
+  IF (TG_OP = 'INSERT' AND NEW.status <> 'prospect')
+     OR (TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status) THEN
+    IF NOT ledger_is_founder(v_actor) THEN
+      RAISE EXCEPTION 'only a founder can change a coach''s status'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF (TG_OP = 'INSERT' AND NEW.status NOT IN ('prospect', 'vetting'))
+       OR (TG_OP = 'UPDATE' AND NOT (OLD.status, NEW.status) IN (
+            ('prospect', 'vetting'), ('prospect', 'removed'),
+            ('vetting', 'active'), ('vetting', 'prospect'), ('vetting', 'removed'),
+            ('active', 'paused'), ('active', 'removed'),
+            ('paused', 'active'), ('paused', 'removed'),
+            ('removed', 'prospect'))) THEN
+      RAISE EXCEPTION 'a coach cannot go from % to %',
+        CASE WHEN TG_OP = 'INSERT' THEN 'nothing' ELSE OLD.status END, NEW.status
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+  IF NEW.status IN ('vetting', 'active') AND NEW.vetting_standard_id IS NULL THEN
+    SELECT id INTO NEW.vetting_standard_id FROM vetting_standards
+     WHERE status IN ('active', 'draft')
+     ORDER BY (status = 'active') DESC, version DESC LIMIT 1;
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.status IS NOT DISTINCT FROM OLD.status THEN
     NEW.status_changed_by := OLD.status_changed_by;
     NEW.status_changed_at := OLD.status_changed_at;
     RETURN NEW;
   END IF;
   IF NEW.status = 'active' THEN
-    IF NOT ledger_is_founder(v_actor) THEN
-      RAISE EXCEPTION 'only a founder can mark a coach active' USING ERRCODE = 'insufficient_privilege';
+    SELECT status, activated_at INTO v_standard_status, v_activated_at
+      FROM vetting_standards WHERE id = NEW.vetting_standard_id;
+    IF v_standard_status IS DISTINCT FROM 'active'
+       AND NOT (TG_OP = 'UPDATE' AND OLD.status = 'paused' AND v_standard_status = 'retired'
+                AND v_activated_at IS NOT NULL
+                AND OLD.last_active_standard_id = NEW.vetting_standard_id) THEN
+      RAISE EXCEPTION 'coach % cannot be active: its vetting standard is not active', NEW.id
+        USING ERRCODE = 'check_violation';
     END IF;
-    SELECT array_agg(t ORDER BY t) INTO v_missing
-      FROM unnest(ARRAY['interview', 'reference_1', 'reference_2', 'paying_client_evidence',
-                        'program_and_price', 'signed_agreement']) AS t
-     WHERE NOT EXISTS (
-       SELECT 1 FROM vetting_items v
-        WHERE v.coach_id = NEW.id AND v.item_type = t
-          AND v.verified_at IS NOT NULL AND ledger_is_founder(v.verified_by));
+    SELECT array_agg(t.key ORDER BY t.sort_order, t.key) INTO v_missing
+      FROM vetting_item_types t
+     WHERE t.standard_id = NEW.vetting_standard_id AND t.required
+       AND NOT EXISTS (
+         SELECT 1 FROM vetting_items v
+          WHERE v.coach_id = NEW.id AND v.item_type_id = t.id
+            AND v.verified_at IS NOT NULL AND ledger_is_founder(v.verified_by));
     IF v_missing IS NOT NULL THEN
       RAISE EXCEPTION 'coach % cannot be active: unverified vetting items %', NEW.id, v_missing
         USING ERRCODE = 'check_violation';
     END IF;
+    NEW.last_active_standard_id := NEW.vetting_standard_id;
   END IF;
   NEW.status_changed_by := v_actor;
   NEW.status_changed_at := now();
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: console_users_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.console_users_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM actors WHERE id = NEW.actor_id AND kind = 'founder') THEN
+    RAISE EXCEPTION 'console users are founders' USING ERRCODE = 'check_violation';
+  END IF;
   RETURN NEW;
 END $$;
 
@@ -204,19 +277,53 @@ CREATE FUNCTION public.ledger_current_actor_id() RETURNS uuid
     LANGUAGE plpgsql STABLE
     AS $$
 DECLARE
-  v_name text := nullif(current_setting('app.actor', true), '');
-  v_id   uuid;
+  v_name   text := nullif(current_setting('app.actor', true), '');
+  v_id     uuid;
+  v_kind   text;
+  v_group  text;
 BEGIN
   IF v_name IS NULL THEN
     RAISE EXCEPTION 'app.actor is not set: every Ledger write must name its actor'
       USING ERRCODE = 'insufficient_privilege',
             HINT = 'SELECT set_config(''app.actor'', ''<actor name>'', true) first';
   END IF;
-  SELECT id INTO v_id FROM actors WHERE name = v_name AND active;
+  SELECT id, kind INTO v_id, v_kind FROM actors WHERE name = v_name AND active;
   IF v_id IS NULL THEN
     RAISE EXCEPTION 'unknown or inactive actor: %', v_name USING ERRCODE = 'insufficient_privilege';
   END IF;
+  v_group := ledger_login_group();
+  IF v_group IS NOT NULL AND NOT (
+       (v_group = 'n8n' AND v_name = 'n8n')
+    OR (v_group = 'worker' AND v_kind = 'system' AND v_name NOT IN ('migration', 'review_console'))
+    OR (v_group = 'console' AND (v_kind = 'founder' OR v_name = 'review_console'))
+  ) THEN
+    RAISE EXCEPTION 'this database login may not act as a % actor', v_kind
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
   RETURN v_id;
+END $$;
+
+
+--
+-- Name: ledger_default_market(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ledger_default_market() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_count  integer;
+  v_key    text;
+BEGIN
+  IF NEW.market_key IS NULL THEN
+    SELECT count(*), min(key) INTO v_count, v_key FROM markets WHERE active;
+    IF v_count <> 1 THEN
+      RAISE EXCEPTION '%.market_key is required when % markets are active', TG_TABLE_NAME, v_count
+        USING ERRCODE = 'not_null_violation';
+    END IF;
+    NEW.market_key := v_key;
+  END IF;
+  RETURN NEW;
 END $$;
 
 
@@ -263,6 +370,18 @@ CREATE FUNCTION public.ledger_is_founder(p_actor uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
   SELECT EXISTS (SELECT 1 FROM actors WHERE id = p_actor AND kind = 'founder' AND active)
+$$;
+
+
+--
+-- Name: ledger_is_rule_writer(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ledger_is_rule_writer(p_actor uuid) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT EXISTS (SELECT 1 FROM actors WHERE id = p_actor AND active
+                   AND (kind = 'founder' OR name = 'migration'))
 $$;
 
 
@@ -342,6 +461,27 @@ END $$;
 
 
 --
+-- Name: ledger_login_group(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ledger_login_group() RETURNS text
+    LANGUAGE plpgsql STABLE
+    AS $$
+DECLARE
+  u name;
+BEGIN
+  FOREACH u IN ARRAY ARRAY[current_user, session_user] LOOP
+    CONTINUE WHEN (SELECT rolsuper FROM pg_roles WHERE rolname = u);
+    IF pg_has_role(u, 'ledger_n8n', 'USAGE') THEN RETURN 'n8n'; END IF;
+    IF pg_has_role(u, 'ledger_worker', 'USAGE') THEN RETURN 'worker'; END IF;
+    IF pg_has_role(u, 'ledger_console', 'USAGE') THEN RETURN 'console'; END IF;
+    IF pg_has_role(u, 'ledger_reporting', 'USAGE') THEN RETURN 'reporting'; END IF;
+  END LOOP;
+  RETURN NULL;
+END $$;
+
+
+--
 -- Name: ledger_require_founder(uuid, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -356,6 +496,35 @@ END $$;
 
 
 --
+-- Name: ledger_rule_writer_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ledger_rule_writer_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT ledger_is_rule_writer(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder can change %', TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: ledger_setting(text, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.ledger_setting(p_key text, p_default jsonb) RETURNS jsonb
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT coalesce((SELECT value FROM settings WHERE key = p_key), p_default)
+$$;
+
+
+--
 -- Name: ledger_touch_updated_at(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -364,6 +533,37 @@ CREATE FUNCTION public.ledger_touch_updated_at() RETURNS trigger
     AS $$
 BEGIN
   NEW.updated_at := now();
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: market_need_states_stamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.market_need_states_stamp() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF TG_OP = 'INSERT' OR NEW.launched IS DISTINCT FROM OLD.launched THEN
+    NEW.changed_by := ledger_current_actor_id();
+    NEW.changed_at := now();
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: markets_time_zone_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.markets_time_zone_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = NEW.time_zone) THEN
+    RAISE EXCEPTION 'unknown time zone %', NEW.time_zone USING ERRCODE = 'check_violation';
+  END IF;
   RETURN NEW;
 END $$;
 
@@ -435,6 +635,72 @@ END $$;
 
 
 --
+-- Name: settings_stamp(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.settings_stamp() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  NEW.changed_by := ledger_current_actor_id();
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: system_job_types_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.system_job_types_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.system_key IS DISTINCT FROM OLD.system_key
+     AND NOT ledger_is_rule_writer(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can move a job type to another system'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: systems_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.systems_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_actor uuid := ledger_current_actor_id();
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.required IS DISTINCT FROM OLD.required
+     AND NOT ledger_is_rule_writer(v_actor) THEN
+    RAISE EXCEPTION 'only a founder (or a migration) can change whether a system is required'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.required AND OLD.enabled AND NOT NEW.enabled THEN
+    RAISE EXCEPTION 'system % is required and cannot be turned off', NEW.key
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'INSERT' AND NOT ledger_is_rule_writer(v_actor) THEN
+    NEW.enabled := false;
+  ELSIF TG_OP = 'UPDATE' AND NEW.enabled IS DISTINCT FROM OLD.enabled
+        AND NOT ledger_is_rule_writer(v_actor) THEN
+    RAISE EXCEPTION 'only a founder can turn a system on or off' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'INSERT' OR NEW.enabled IS DISTINCT FROM OLD.enabled THEN
+    NEW.enabled_changed_by := v_actor;
+    NEW.enabled_changed_at := now();
+  ELSE
+    NEW.enabled_changed_by := OLD.enabled_changed_by;
+    NEW.enabled_changed_at := OLD.enabled_changed_at;
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
 -- Name: templates_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -458,6 +724,75 @@ END $$;
 
 
 --
+-- Name: vetting_evidence_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.vetting_evidence_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_actor uuid := ledger_current_actor_id();
+BEGIN
+  IF NOT ledger_is_founder(v_actor) THEN
+    RAISE EXCEPTION 'only a founder handles vetting evidence' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.uploaded_by := v_actor;
+    NEW.removed_by := NULL;
+    NEW.removed_at := NULL;
+    RETURN NEW;
+  END IF;
+  IF (NEW.kind, NEW.relative_path, NEW.sha256, NEW.size_bytes, NEW.note, NEW.vetting_item_id, NEW.uploaded_by)
+     IS DISTINCT FROM
+     (OLD.kind, OLD.relative_path, OLD.sha256, OLD.size_bytes, OLD.note, OLD.vetting_item_id, OLD.uploaded_by) THEN
+    RAISE EXCEPTION 'evidence is never edited; add new evidence and remove the old'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF OLD.removed_at IS NULL AND NEW.removed_at IS NOT NULL THEN
+    NEW.removed_by := v_actor;
+  ELSIF NEW.removed_at IS DISTINCT FROM OLD.removed_at THEN
+    RAISE EXCEPTION 'removed evidence stays removed' USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: vetting_item_types_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.vetting_item_types_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_status text;
+BEGIN
+  IF NOT ledger_is_rule_writer(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder can change a vetting standard' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    SELECT status INTO v_status FROM vetting_standards WHERE id = OLD.standard_id;
+    IF v_status <> 'draft' THEN
+      RAISE EXCEPTION 'items of an active or retired vetting standard are fixed'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.standard_id <> OLD.standard_id THEN
+    RAISE EXCEPTION 'a vetting item type stays in its standard' USING ERRCODE = 'check_violation';
+  END IF;
+  SELECT status INTO v_status FROM vetting_standards WHERE id = NEW.standard_id;
+  IF v_status <> 'draft' THEN
+    RAISE EXCEPTION 'items of an active or retired vetting standard are fixed'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
 -- Name: vetting_items_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -468,6 +803,110 @@ BEGIN
   PERFORM ledger_require_founder(NEW.verified_by, 'vetting_items.verified_by');
   IF NEW.verified_by IS NOT NULL AND NEW.verified_by <> ledger_current_actor_id() THEN
     RAISE EXCEPTION 'a vetting item is verified by the founder making the change'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: vetting_items_type_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.vetting_items_type_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_standard  uuid;
+  v_type      vetting_item_types%ROWTYPE;
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.coach_id <> OLD.coach_id THEN
+    RAISE EXCEPTION 'a vetting item cannot move to another coach' USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'UPDATE' AND NEW.item_type_id IS NOT DISTINCT FROM OLD.item_type_id
+     AND NEW.item_type IS NOT DISTINCT FROM OLD.item_type THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.verified_at IS NOT NULL
+     AND NOT ledger_is_founder(ledger_current_actor_id()) THEN
+    RAISE EXCEPTION 'only a founder can change a verified vetting item'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT vetting_standard_id INTO v_standard FROM coaches WHERE id = NEW.coach_id;
+  IF v_standard IS NULL THEN
+    RAISE EXCEPTION 'coach % has no vetting standard yet: move the coach to vetting first', NEW.coach_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW.item_type_id IS NOT NULL THEN
+    SELECT * INTO v_type FROM vetting_item_types WHERE id = NEW.item_type_id;
+  ELSE
+    SELECT * INTO v_type FROM vetting_item_types WHERE standard_id = v_standard AND key = NEW.item_type;
+  END IF;
+  IF v_type.id IS NULL OR v_type.standard_id <> v_standard THEN
+    RAISE EXCEPTION 'vetting item % is not part of this coach''s standard', coalesce(NEW.item_type, '?')
+      USING ERRCODE = 'check_violation';
+  END IF;
+  NEW.item_type_id := v_type.id;
+  NEW.item_type := v_type.key;
+  RETURN NEW;
+END $$;
+
+
+--
+-- Name: vetting_standards_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.vetting_standards_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_actor     uuid := ledger_current_actor_id();
+  v_required  integer;
+BEGIN
+  IF NOT ledger_is_rule_writer(v_actor) THEN
+    RAISE EXCEPTION 'only a founder can change a vetting standard' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'vetting standards are never deleted; retire a draft instead'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'draft' THEN
+      RAISE EXCEPTION 'a new vetting standard starts as a draft' USING ERRCODE = 'check_violation';
+    END IF;
+    NEW.activated_by := NULL;
+    NEW.activated_at := NULL;
+    NEW.retired_at := NULL;
+    RETURN NEW;
+  END IF;
+  IF NEW.version <> OLD.version THEN
+    RAISE EXCEPTION 'a vetting standard keeps its version number' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NEW.status = OLD.status THEN
+    IF OLD.status <> 'draft' AND NEW.title IS DISTINCT FROM OLD.title THEN
+      RAISE EXCEPTION 'only a draft vetting standard can be edited' USING ERRCODE = 'check_violation';
+    END IF;
+    NEW.activated_by := OLD.activated_by;
+    NEW.activated_at := OLD.activated_at;
+    NEW.retired_at := OLD.retired_at;
+    RETURN NEW;
+  END IF;
+  IF OLD.status = 'draft' AND NEW.status = 'active' THEN
+    IF NOT ledger_is_founder(v_actor) THEN
+      RAISE EXCEPTION 'only a founder can activate a vetting standard'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT count(*) INTO v_required FROM vetting_item_types WHERE standard_id = NEW.id AND required;
+    IF v_required = 0 THEN
+      RAISE EXCEPTION 'a vetting standard needs at least one required item before it can be active'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    NEW.activated_by := v_actor;
+    NEW.activated_at := now();
+  ELSIF NEW.status = 'retired' AND OLD.status IN ('draft', 'active') THEN
+    NEW.retired_at := now();
+  ELSE
+    RAISE EXCEPTION 'a vetting standard moves draft -> active -> retired only'
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -531,6 +970,7 @@ CREATE TABLE public.ads (
     status text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    market_key text NOT NULL,
     CONSTRAINT ads_platform_check CHECK ((platform = ANY (ARRAY['meta'::text, 'tiktok'::text])))
 );
 
@@ -702,7 +1142,13 @@ CREATE TABLE public.coaches (
     source text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    market_key text NOT NULL,
+    vetting_standard_id uuid,
+    last_active_standard_id uuid,
+    postal_code text,
+    notes text,
     CONSTRAINT coaches_capacity_open_check CHECK ((capacity_open >= 0)),
+    CONSTRAINT coaches_postal_code_check CHECK ((postal_code ~ '^[A-Za-z0-9 -]{3,10}$'::text)),
     CONSTRAINT coaches_price_per_month_cents_check CHECK ((price_per_month_cents >= 0)),
     CONSTRAINT coaches_program_length_months_check CHECK ((program_length_months > 0)),
     CONSTRAINT coaches_source_check CHECK ((source = ANY (ARRAY['research'::text, 'referral'::text, 'inbound'::text]))),
@@ -771,6 +1217,44 @@ CREATE TABLE public.consent_records (
     CONSTRAINT consent_records_action_check CHECK ((action = ANY (ARRAY['granted'::text, 'revoked'::text]))),
     CONSTRAINT consent_records_channel_check CHECK ((channel = ANY (ARRAY['call'::text, 'text'::text, 'email'::text, 'recording'::text, 'coach_share'::text]))),
     CONSTRAINT consent_records_source_check CHECK ((source = ANY (ARRAY['intake_form'::text, 'sms_reply'::text, 'call'::text, 'founder'::text])))
+);
+
+
+--
+-- Name: console_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.console_sessions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    console_user_id uuid NOT NULL,
+    token_sha256 text NOT NULL,
+    local boolean DEFAULT false NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT console_sessions_token_sha256_check CHECK ((token_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: console_users; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.console_users (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    actor_id uuid NOT NULL,
+    tailscale_login text,
+    password_hash text NOT NULL,
+    allow_local_signin boolean DEFAULT false NOT NULL,
+    failed_signins smallint DEFAULT 0 NOT NULL,
+    locked_until timestamp with time zone,
+    password_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT console_users_failed_signins_check CHECK ((failed_signins >= 0))
 );
 
 
@@ -856,7 +1340,7 @@ CREATE TABLE public.jobs (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT jobs_error_detail_check CHECK ((length(error_detail) <= 500)),
-    CONSTRAINT jobs_job_type_check CHECK ((job_type ~ '^[a-z][a-z0-9_]*$'::text)),
+    CONSTRAINT jobs_job_type_check CHECK ((job_type ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$'::text)),
     CONSTRAINT jobs_max_attempts_check CHECK (((max_attempts >= 1) AND (max_attempts <= 10))),
     CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
@@ -905,11 +1389,43 @@ CREATE TABLE public.leads (
     safety_hold_cleared_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    market_key text NOT NULL,
     CONSTRAINT leads_phone_e164_check CHECK ((phone_e164 ~ '^\+[1-9][0-9]{6,14}$'::text)),
     CONSTRAINT leads_qualification_reason_check CHECK ((qualification_reason ~ '^[a-z][a-z0-9_]*$'::text)),
     CONSTRAINT leads_qualification_result_check CHECK ((qualification_result = ANY (ARRAY['qualified'::text, 'not_qualified'::text]))),
     CONSTRAINT leads_source_platform_check CHECK ((source_platform = ANY (ARRAY['meta'::text, 'tiktok'::text, 'organic'::text, 'referral'::text, 'test'::text]))),
     CONSTRAINT leads_status_check CHECK ((status = ANY (ARRAY['new'::text, 'booked'::text, 'called'::text, 'qualified'::text, 'disqualified'::text, 'matched'::text, 'introduced'::text, 'won'::text, 'lost'::text, 'dormant'::text])))
+);
+
+
+--
+-- Name: market_need_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.market_need_states (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    market_key text NOT NULL,
+    need_state_key text NOT NULL,
+    launched boolean DEFAULT true NOT NULL,
+    changed_by uuid,
+    changed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: markets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.markets (
+    key text NOT NULL,
+    name text NOT NULL,
+    time_zone text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT markets_key_check CHECK ((key ~ '^[a-z][a-z0-9_]*$'::text))
 );
 
 
@@ -970,9 +1486,12 @@ CREATE TABLE public.need_states (
     key text NOT NULL,
     label text NOT NULL,
     active boolean DEFAULT true NOT NULL,
-    launched_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    description text,
+    covers text,
+    not_covered text,
+    sort_order smallint DEFAULT 100 NOT NULL,
     CONSTRAINT need_states_key_check CHECK ((key ~ '^[a-z][a-z0-9_]*$'::text))
 );
 
@@ -1068,6 +1587,52 @@ CREATE TABLE public.schema_migrations (
 
 
 --
+-- Name: settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.settings (
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    changed_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT settings_key_check CHECK ((key ~ '^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$'::text))
+);
+
+
+--
+-- Name: system_job_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.system_job_types (
+    job_type text NOT NULL,
+    system_key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT system_job_types_job_type_check CHECK ((job_type ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$'::text))
+);
+
+
+--
+-- Name: systems; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.systems (
+    key text NOT NULL,
+    title text NOT NULL,
+    version integer NOT NULL,
+    required boolean DEFAULT false NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    enabled_changed_by uuid,
+    enabled_changed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT systems_key_check CHECK ((key ~ '^[a-z][a-z0-9_]{1,39}$'::text)),
+    CONSTRAINT systems_version_check CHECK ((version >= 1))
+);
+
+
+--
 -- Name: templates; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1094,6 +1659,55 @@ CREATE TABLE public.templates (
 
 
 --
+-- Name: vetting_evidence; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vetting_evidence (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    vetting_item_id uuid NOT NULL,
+    kind text NOT NULL,
+    relative_path text,
+    display_name text,
+    content_type text,
+    sha256 text,
+    size_bytes bigint,
+    note text,
+    uploaded_by uuid NOT NULL,
+    removed_by uuid,
+    removed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT vetting_evidence_check CHECK (((kind = 'file'::text) = ((relative_path IS NOT NULL) AND (sha256 IS NOT NULL) AND (size_bytes IS NOT NULL)))),
+    CONSTRAINT vetting_evidence_check1 CHECK (((kind = 'note'::text) = (note IS NOT NULL))),
+    CONSTRAINT vetting_evidence_check2 CHECK (((removed_by IS NULL) = (removed_at IS NULL))),
+    CONSTRAINT vetting_evidence_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'note'::text]))),
+    CONSTRAINT vetting_evidence_relative_path_check CHECK (((relative_path !~ '^/'::text) AND (relative_path !~ '(^|/)\.\.(/|$)'::text))),
+    CONSTRAINT vetting_evidence_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT vetting_evidence_size_bytes_check CHECK ((size_bytes >= 0))
+);
+
+
+--
+-- Name: vetting_item_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vetting_item_types (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    standard_id uuid NOT NULL,
+    key text NOT NULL,
+    label text NOT NULL,
+    description text,
+    evidence_kind text DEFAULT 'any'::text NOT NULL,
+    required boolean DEFAULT true NOT NULL,
+    sort_order smallint DEFAULT 100 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT vetting_item_types_evidence_kind_check CHECK ((evidence_kind = ANY (ARRAY['file'::text, 'note'::text, 'any'::text]))),
+    CONSTRAINT vetting_item_types_key_check CHECK ((key ~ '^[a-z][a-z0-9_]*$'::text))
+);
+
+
+--
 -- Name: vetting_items; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1107,8 +1721,27 @@ CREATE TABLE public.vetting_items (
     verified_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT vetting_items_check CHECK (((verified_by IS NULL) = (verified_at IS NULL))),
-    CONSTRAINT vetting_items_item_type_check CHECK ((item_type = ANY (ARRAY['interview'::text, 'reference_1'::text, 'reference_2'::text, 'paying_client_evidence'::text, 'program_and_price'::text, 'signed_agreement'::text])))
+    item_type_id uuid,
+    CONSTRAINT vetting_items_check CHECK (((verified_by IS NULL) = (verified_at IS NULL)))
+);
+
+
+--
+-- Name: vetting_standards; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vetting_standards (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    version integer NOT NULL,
+    title text NOT NULL,
+    status text DEFAULT 'draft'::text NOT NULL,
+    activated_by uuid,
+    activated_at timestamp with time zone,
+    retired_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT vetting_standards_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'retired'::text]))),
+    CONSTRAINT vetting_standards_version_check CHECK ((version >= 1))
 );
 
 
@@ -1281,6 +1914,46 @@ ALTER TABLE ONLY public.consent_records
 
 
 --
+-- Name: console_sessions console_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_sessions
+    ADD CONSTRAINT console_sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: console_sessions console_sessions_token_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_sessions
+    ADD CONSTRAINT console_sessions_token_sha256_key UNIQUE (token_sha256);
+
+
+--
+-- Name: console_users console_users_actor_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_users
+    ADD CONSTRAINT console_users_actor_id_key UNIQUE (actor_id);
+
+
+--
+-- Name: console_users console_users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_users
+    ADD CONSTRAINT console_users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: console_users console_users_tailscale_login_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_users
+    ADD CONSTRAINT console_users_tailscale_login_key UNIQUE (tailscale_login);
+
+
+--
 -- Name: events events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1326,6 +1999,30 @@ ALTER TABLE ONLY public.leads
 
 ALTER TABLE ONLY public.leads
     ADD CONSTRAINT leads_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: market_need_states market_need_states_market_key_need_state_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.market_need_states
+    ADD CONSTRAINT market_need_states_market_key_need_state_key_key UNIQUE (market_key, need_state_key);
+
+
+--
+-- Name: market_need_states market_need_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.market_need_states
+    ADD CONSTRAINT market_need_states_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: markets markets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.markets
+    ADD CONSTRAINT markets_pkey PRIMARY KEY (key);
 
 
 --
@@ -1401,6 +2098,30 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
+-- Name: settings settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.settings
+    ADD CONSTRAINT settings_pkey PRIMARY KEY (key);
+
+
+--
+-- Name: system_job_types system_job_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.system_job_types
+    ADD CONSTRAINT system_job_types_pkey PRIMARY KEY (job_type);
+
+
+--
+-- Name: systems systems_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.systems
+    ADD CONSTRAINT systems_pkey PRIMARY KEY (key);
+
+
+--
 -- Name: templates templates_key_version_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1417,6 +2138,30 @@ ALTER TABLE ONLY public.templates
 
 
 --
+-- Name: vetting_evidence vetting_evidence_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_evidence
+    ADD CONSTRAINT vetting_evidence_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vetting_item_types vetting_item_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_item_types
+    ADD CONSTRAINT vetting_item_types_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vetting_item_types vetting_item_types_standard_id_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_item_types
+    ADD CONSTRAINT vetting_item_types_standard_id_key_key UNIQUE (standard_id, key);
+
+
+--
 -- Name: vetting_items vetting_items_coach_id_item_type_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1430,6 +2175,22 @@ ALTER TABLE ONLY public.vetting_items
 
 ALTER TABLE ONLY public.vetting_items
     ADD CONSTRAINT vetting_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vetting_standards vetting_standards_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_standards
+    ADD CONSTRAINT vetting_standards_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vetting_standards vetting_standards_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_standards
+    ADD CONSTRAINT vetting_standards_version_key UNIQUE (version);
 
 
 --
@@ -1476,10 +2237,24 @@ CREATE INDEX calls_purge ON public.calls USING btree (purge_after) WHERE (purged
 
 
 --
+-- Name: coaches_market_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coaches_market_status ON public.coaches USING btree (market_key, status);
+
+
+--
 -- Name: consent_records_lead; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX consent_records_lead ON public.consent_records USING btree (lead_id, created_at);
+
+
+--
+-- Name: console_sessions_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX console_sessions_user ON public.console_sessions USING btree (console_user_id) WHERE (revoked_at IS NULL);
 
 
 --
@@ -1553,6 +2328,20 @@ CREATE INDEX safety_flags_open ON public.safety_flags USING btree (lead_id) WHER
 
 
 --
+-- Name: vetting_evidence_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX vetting_evidence_item ON public.vetting_evidence USING btree (vetting_item_id);
+
+
+--
+-- Name: vetting_standards_one_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX vetting_standards_one_active ON public.vetting_standards USING btree (status) WHERE (status = 'active'::text);
+
+
+--
 -- Name: actors actors_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1578,6 +2367,13 @@ CREATE TRIGGER ad_daily_events AFTER INSERT OR DELETE OR UPDATE ON public.ad_dai
 --
 
 CREATE TRIGGER ad_daily_updated_at BEFORE UPDATE ON public.ad_daily FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: ads ads_default_market; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER ads_default_market BEFORE INSERT ON public.ads FOR EACH ROW EXECUTE FUNCTION public.ledger_default_market();
 
 
 --
@@ -1672,10 +2468,17 @@ CREATE TRIGGER coach_need_states_updated_at BEFORE UPDATE ON public.coach_need_s
 
 
 --
+-- Name: coaches coaches_default_market; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coaches_default_market BEFORE INSERT ON public.coaches FOR EACH ROW EXECUTE FUNCTION public.ledger_default_market();
+
+
+--
 -- Name: coaches coaches_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER coaches_events AFTER INSERT OR DELETE OR UPDATE ON public.coaches FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'legal_name', 'email', 'phone');
+CREATE TRIGGER coaches_events AFTER INSERT OR DELETE OR UPDATE ON public.coaches FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'display_name', 'legal_name', 'email', 'phone', 'website', 'home_area', 'postal_code', 'profile_summary', 'notes');
 
 
 --
@@ -1742,6 +2545,34 @@ CREATE TRIGGER consent_records_updated_at BEFORE UPDATE ON public.consent_record
 
 
 --
+-- Name: console_sessions console_sessions_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER console_sessions_updated_at BEFORE UPDATE ON public.console_sessions FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: console_users console_users_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER console_users_events AFTER INSERT OR DELETE OR UPDATE ON public.console_users FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'tailscale_login', 'password_hash');
+
+
+--
+-- Name: console_users console_users_founder; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER console_users_founder BEFORE INSERT OR UPDATE OF actor_id ON public.console_users FOR EACH ROW EXECUTE FUNCTION public.console_users_guard();
+
+
+--
+-- Name: console_users console_users_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER console_users_updated_at BEFORE UPDATE ON public.console_users FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
 -- Name: events events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1784,6 +2615,13 @@ CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON public.jobs FOR EACH ROW EXECUTE
 
 
 --
+-- Name: leads leads_default_market; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER leads_default_market BEFORE INSERT ON public.leads FOR EACH ROW EXECUTE FUNCTION public.ledger_default_market();
+
+
+--
 -- Name: leads leads_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1802,6 +2640,62 @@ CREATE TRIGGER leads_safety_hold BEFORE INSERT OR UPDATE ON public.leads FOR EAC
 --
 
 CREATE TRIGGER leads_updated_at BEFORE UPDATE ON public.leads FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: market_need_states market_need_states_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER market_need_states_events AFTER INSERT OR DELETE OR UPDATE ON public.market_need_states FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+
+
+--
+-- Name: market_need_states market_need_states_rule_writer; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER market_need_states_rule_writer BEFORE INSERT OR DELETE OR UPDATE ON public.market_need_states FOR EACH ROW EXECUTE FUNCTION public.ledger_rule_writer_guard();
+
+
+--
+-- Name: market_need_states market_need_states_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER market_need_states_stamp BEFORE INSERT OR UPDATE ON public.market_need_states FOR EACH ROW EXECUTE FUNCTION public.market_need_states_stamp();
+
+
+--
+-- Name: market_need_states market_need_states_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER market_need_states_updated_at BEFORE UPDATE ON public.market_need_states FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: markets markets_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER markets_events AFTER INSERT OR DELETE OR UPDATE ON public.markets FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('key');
+
+
+--
+-- Name: markets markets_rule_writer; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER markets_rule_writer BEFORE INSERT OR DELETE OR UPDATE ON public.markets FOR EACH ROW EXECUTE FUNCTION public.ledger_rule_writer_guard();
+
+
+--
+-- Name: markets markets_time_zone; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER markets_time_zone BEFORE INSERT OR UPDATE OF time_zone ON public.markets FOR EACH ROW EXECUTE FUNCTION public.markets_time_zone_guard();
+
+
+--
+-- Name: markets markets_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER markets_updated_at BEFORE UPDATE ON public.markets FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
 
 
 --
@@ -1844,6 +2738,13 @@ CREATE TRIGGER matches_updated_at BEFORE UPDATE ON public.matches FOR EACH ROW E
 --
 
 CREATE TRIGGER need_states_events AFTER INSERT OR DELETE OR UPDATE ON public.need_states FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('key');
+
+
+--
+-- Name: need_states need_states_rule_writer; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER need_states_rule_writer BEFORE INSERT OR DELETE OR UPDATE ON public.need_states FOR EACH ROW EXECUTE FUNCTION public.ledger_rule_writer_guard();
 
 
 --
@@ -1903,6 +2804,76 @@ CREATE TRIGGER safety_flags_updated_at BEFORE UPDATE ON public.safety_flags FOR 
 
 
 --
+-- Name: settings settings_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER settings_events AFTER INSERT OR DELETE OR UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('key');
+
+
+--
+-- Name: settings settings_rule_writer; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER settings_rule_writer BEFORE INSERT OR DELETE OR UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.ledger_rule_writer_guard();
+
+
+--
+-- Name: settings settings_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER settings_stamp BEFORE INSERT OR UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.settings_stamp();
+
+
+--
+-- Name: settings settings_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER settings_updated_at BEFORE UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: system_job_types system_job_types_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER system_job_types_events AFTER INSERT OR DELETE OR UPDATE ON public.system_job_types FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('job_type');
+
+
+--
+-- Name: system_job_types system_job_types_owner; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER system_job_types_owner BEFORE UPDATE ON public.system_job_types FOR EACH ROW EXECUTE FUNCTION public.system_job_types_guard();
+
+
+--
+-- Name: system_job_types system_job_types_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER system_job_types_updated_at BEFORE UPDATE ON public.system_job_types FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: systems systems_enabled; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER systems_enabled BEFORE INSERT OR UPDATE ON public.systems FOR EACH ROW EXECUTE FUNCTION public.systems_guard();
+
+
+--
+-- Name: systems systems_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER systems_events AFTER INSERT OR DELETE OR UPDATE ON public.systems FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('key');
+
+
+--
+-- Name: systems systems_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER systems_updated_at BEFORE UPDATE ON public.systems FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
 -- Name: templates templates_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1924,6 +2895,48 @@ CREATE TRIGGER templates_updated_at BEFORE UPDATE ON public.templates FOR EACH R
 
 
 --
+-- Name: vetting_evidence vetting_evidence_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_evidence_events AFTER INSERT OR DELETE OR UPDATE ON public.vetting_evidence FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id', 'relative_path', 'display_name', 'note');
+
+
+--
+-- Name: vetting_evidence vetting_evidence_founder; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_evidence_founder BEFORE INSERT OR UPDATE ON public.vetting_evidence FOR EACH ROW EXECUTE FUNCTION public.vetting_evidence_guard();
+
+
+--
+-- Name: vetting_evidence vetting_evidence_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_evidence_updated_at BEFORE UPDATE ON public.vetting_evidence FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: vetting_item_types vetting_item_types_draft_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_item_types_draft_only BEFORE INSERT OR DELETE OR UPDATE ON public.vetting_item_types FOR EACH ROW EXECUTE FUNCTION public.vetting_item_types_guard();
+
+
+--
+-- Name: vetting_item_types vetting_item_types_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_item_types_events AFTER INSERT OR DELETE OR UPDATE ON public.vetting_item_types FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+
+
+--
+-- Name: vetting_item_types vetting_item_types_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_item_types_updated_at BEFORE UPDATE ON public.vetting_item_types FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
 -- Name: vetting_items vetting_items_events; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1938,10 +2951,38 @@ CREATE TRIGGER vetting_items_founder BEFORE INSERT OR UPDATE OF verified_by ON p
 
 
 --
+-- Name: vetting_items vetting_items_type; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_items_type BEFORE INSERT OR UPDATE ON public.vetting_items FOR EACH ROW EXECUTE FUNCTION public.vetting_items_type_guard();
+
+
+--
 -- Name: vetting_items vetting_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER vetting_items_updated_at BEFORE UPDATE ON public.vetting_items FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
+
+
+--
+-- Name: vetting_standards vetting_standards_events; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_standards_events AFTER INSERT OR DELETE OR UPDATE ON public.vetting_standards FOR EACH ROW EXECUTE FUNCTION public.ledger_log_change('id');
+
+
+--
+-- Name: vetting_standards vetting_standards_lifecycle; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_standards_lifecycle BEFORE INSERT OR DELETE OR UPDATE ON public.vetting_standards FOR EACH ROW EXECUTE FUNCTION public.vetting_standards_guard();
+
+
+--
+-- Name: vetting_standards vetting_standards_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER vetting_standards_updated_at BEFORE UPDATE ON public.vetting_standards FOR EACH ROW EXECUTE FUNCTION public.ledger_touch_updated_at();
 
 
 --
@@ -1957,6 +2998,14 @@ CREATE TRIGGER worker_heartbeats_updated_at BEFORE UPDATE ON public.worker_heart
 
 ALTER TABLE ONLY public.ad_daily
     ADD CONSTRAINT ad_daily_ad_id_fkey FOREIGN KEY (ad_id) REFERENCES public.ads(id);
+
+
+--
+-- Name: ads ads_market_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ads
+    ADD CONSTRAINT ads_market_key_fkey FOREIGN KEY (market_key) REFERENCES public.markets(key);
 
 
 --
@@ -2056,11 +3105,35 @@ ALTER TABLE ONLY public.coach_need_states
 
 
 --
+-- Name: coaches coaches_last_active_standard_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coaches
+    ADD CONSTRAINT coaches_last_active_standard_fk FOREIGN KEY (last_active_standard_id) REFERENCES public.vetting_standards(id);
+
+
+--
+-- Name: coaches coaches_market_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coaches
+    ADD CONSTRAINT coaches_market_key_fkey FOREIGN KEY (market_key) REFERENCES public.markets(key);
+
+
+--
 -- Name: coaches coaches_status_changed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.coaches
     ADD CONSTRAINT coaches_status_changed_by_fkey FOREIGN KEY (status_changed_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: coaches coaches_vetting_standard_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coaches
+    ADD CONSTRAINT coaches_vetting_standard_fk FOREIGN KEY (vetting_standard_id) REFERENCES public.vetting_standards(id);
 
 
 --
@@ -2109,6 +3182,22 @@ ALTER TABLE ONLY public.commissions
 
 ALTER TABLE ONLY public.consent_records
     ADD CONSTRAINT consent_records_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id);
+
+
+--
+-- Name: console_sessions console_sessions_console_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_sessions
+    ADD CONSTRAINT console_sessions_console_user_id_fkey FOREIGN KEY (console_user_id) REFERENCES public.console_users(id);
+
+
+--
+-- Name: console_users console_users_actor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.console_users
+    ADD CONSTRAINT console_users_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actors(id);
 
 
 --
@@ -2176,6 +3265,14 @@ ALTER TABLE ONLY public.leads
 
 
 --
+-- Name: leads leads_market_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.leads
+    ADD CONSTRAINT leads_market_key_fkey FOREIGN KEY (market_key) REFERENCES public.markets(key);
+
+
+--
 -- Name: leads leads_merged_into_lead_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2205,6 +3302,30 @@ ALTER TABLE ONLY public.leads
 
 ALTER TABLE ONLY public.leads
     ADD CONSTRAINT leads_safety_hold_set_by_fkey FOREIGN KEY (safety_hold_set_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: market_need_states market_need_states_changed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.market_need_states
+    ADD CONSTRAINT market_need_states_changed_by_fkey FOREIGN KEY (changed_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: market_need_states market_need_states_market_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.market_need_states
+    ADD CONSTRAINT market_need_states_market_key_fkey FOREIGN KEY (market_key) REFERENCES public.markets(key);
+
+
+--
+-- Name: market_need_states market_need_states_need_state_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.market_need_states
+    ADD CONSTRAINT market_need_states_need_state_key_fkey FOREIGN KEY (need_state_key) REFERENCES public.need_states(key);
 
 
 --
@@ -2352,11 +3473,67 @@ ALTER TABLE ONLY public.safety_flags
 
 
 --
+-- Name: settings settings_changed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.settings
+    ADD CONSTRAINT settings_changed_by_fkey FOREIGN KEY (changed_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: system_job_types system_job_types_system_key_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.system_job_types
+    ADD CONSTRAINT system_job_types_system_key_fkey FOREIGN KEY (system_key) REFERENCES public.systems(key);
+
+
+--
+-- Name: systems systems_enabled_changed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.systems
+    ADD CONSTRAINT systems_enabled_changed_by_fkey FOREIGN KEY (enabled_changed_by) REFERENCES public.actors(id);
+
+
+--
 -- Name: templates templates_approved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.templates
     ADD CONSTRAINT templates_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: vetting_evidence vetting_evidence_removed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_evidence
+    ADD CONSTRAINT vetting_evidence_removed_by_fkey FOREIGN KEY (removed_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: vetting_evidence vetting_evidence_uploaded_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_evidence
+    ADD CONSTRAINT vetting_evidence_uploaded_by_fkey FOREIGN KEY (uploaded_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: vetting_evidence vetting_evidence_vetting_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_evidence
+    ADD CONSTRAINT vetting_evidence_vetting_item_id_fkey FOREIGN KEY (vetting_item_id) REFERENCES public.vetting_items(id);
+
+
+--
+-- Name: vetting_item_types vetting_item_types_standard_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_item_types
+    ADD CONSTRAINT vetting_item_types_standard_id_fkey FOREIGN KEY (standard_id) REFERENCES public.vetting_standards(id);
 
 
 --
@@ -2368,11 +3545,27 @@ ALTER TABLE ONLY public.vetting_items
 
 
 --
+-- Name: vetting_items vetting_items_item_type_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_items
+    ADD CONSTRAINT vetting_items_item_type_id_fkey FOREIGN KEY (item_type_id) REFERENCES public.vetting_item_types(id);
+
+
+--
 -- Name: vetting_items vetting_items_verified_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.vetting_items
     ADD CONSTRAINT vetting_items_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES public.actors(id);
+
+
+--
+-- Name: vetting_standards vetting_standards_activated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vetting_standards
+    ADD CONSTRAINT vetting_standards_activated_by_fkey FOREIGN KEY (activated_by) REFERENCES public.actors(id);
 
 
 --
@@ -2395,4 +3588,5 @@ ALTER TABLE ONLY public.worker_heartbeats
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20261010000001');
+    ('20261010000001'),
+    ('20261013000001');

@@ -55,7 +55,22 @@ def db_url() -> Iterator[str]:
         conn.execute("CREATE SCHEMA public")
         for sql in migration_up_sql():
             conn.execute(sql)
+        seed_test_market(conn)
     yield url
+
+
+TEST_MARKET = "testville"
+
+
+def seed_test_market(conn) -> None:
+    """One active market, as an install has after its bootstrap. With exactly one
+    active market, coaches, leads and ads may leave market_key out."""
+    with conn.transaction():
+        conn.execute("SELECT set_config('app.actor', 'migration', true)")
+        conn.execute(
+            "INSERT INTO markets (key, name, time_zone) VALUES (%s, 'Testville', 'America/Denver')",
+            (TEST_MARKET,),
+        )
 
 
 @pytest.fixture
@@ -93,3 +108,35 @@ def sentinels() -> dict[str, list[str]]:
     import json
 
     return json.loads((SYNTHETIC / "sentinels.json").read_text(encoding="utf-8"))
+
+
+def enable_systems(db_url: str, *keys: str) -> None:
+    """Register the code's systems and turn the given ones on, as a founder would."""
+    from worker.db import connect, transaction
+    from worker.system_sync import sync_systems
+
+    with connect(db_url) as c:
+        sync_systems(c)
+        with transaction(c, actor="jack"):
+            c.execute("UPDATE systems SET enabled = true WHERE key = ANY(%s)", (list(keys),))
+
+
+TEST_LOGIN_PASSWORD = "test-only-login"
+
+
+def login_url(db_url: str, group: str) -> str:
+    """A real login in `group` (like cl_worker or cl_console in production), so tests go
+    through the Ledger's login -> actor guard and grants, not the superuser."""
+    from urllib.parse import urlunparse
+
+    import psycopg
+
+    name = f"t_{group}"
+    with psycopg.connect(db_url, autocommit=True) as c:
+        exists = c.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (name,)).fetchone()
+        if not exists:
+            c.execute(f"CREATE ROLE {name} LOGIN PASSWORD '{TEST_LOGIN_PASSWORD}'")
+        c.execute(f"GRANT {group} TO {name}")
+    u = urlparse(db_url)
+    netloc = f"{name}:{TEST_LOGIN_PASSWORD}@{u.hostname}" + (f":{u.port}" if u.port else "")
+    return urlunparse(u._replace(netloc=netloc))

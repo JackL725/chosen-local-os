@@ -17,12 +17,11 @@ import argparse
 import json
 import statistics
 import sys
-import time
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import systems
+from evals.outcome import Outcome, Scorer
 from worker.config import Settings
 from worker.errors import error_class
 from worker.jobs import JobContext
@@ -32,48 +31,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SYNTHETIC = ROOT / "evals" / "synthetic"
 
 
-@dataclass(frozen=True)
-class Outcome:
-    case_id: str
-    correct: bool
-    schema_valid: bool
-    latency_ms: int
-    error: str | None = None
-
-
-Scorer = Callable[[dict[str, Any], dict[str, Any], JobContext], Outcome]
-
-
-def _healthcheck(case: dict[str, Any], expected: dict[str, Any], ctx: JobContext) -> Outcome:
-    from worker.jobs import healthcheck
-    from worker.queue import Job
-
-    job = Job(
-        id=case["id"],
-        job_type="healthcheck",
-        payload=case["input"],
-        attempts=1,
-        max_attempts=1,
-        entity_type=None,
-        entity_id=None,
-        claimed_at=None,
-    )
-    started = time.monotonic()
-    try:
-        healthcheck.handle(job, ctx)
-    except Exception as exc:  # noqa: BLE001 - every case is scored, never raised
-        return Outcome(
-            case["id"],
-            False,
-            error_class(exc) != "ModelOutputInvalid",
-            int((time.monotonic() - started) * 1000),
-            error_class(exc),
-        )
-    ok = expected.get("ok") is True
-    return Outcome(case["id"], ok, True, int((time.monotonic() - started) * 1000))
-
-
-SYSTEMS: dict[str, Scorer] = {"healthcheck": _healthcheck}
+def scorers() -> dict[str, Scorer]:
+    """Systems that declare an eval scorer in their manifest, by key."""
+    found: dict[str, Scorer] = {}
+    for key, manifest in systems.all_manifests().items():
+        if manifest.evals:
+            found[key] = systems.load_target(manifest.evals)
+    return found
 
 
 def load_cases(data_dir: Path, system: str) -> list[dict[str, Any]]:
@@ -105,7 +69,7 @@ def run(
     aggregate_only: bool,
     out=sys.stdout,
 ) -> dict[str, float | int | str]:
-    scorer = SYSTEMS[system]
+    scorer = scorers()[system]
     ctx = JobContext(settings=settings, llm=llm, private_data_dir=settings.private_data_dir)
     outcomes = [
         scorer(case, case.get("expected", {}), ctx) for case in load_cases(data_dir, system)
@@ -125,7 +89,7 @@ def run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run")
-    parser.add_argument("system", choices=sorted(SYSTEMS))
+    parser.add_argument("system", choices=sorted(scorers()))
     parser.add_argument("--data-dir", type=Path, default=SYNTHETIC)
     parser.add_argument("--aggregate-only", action="store_true")
     args = parser.parse_args(argv)

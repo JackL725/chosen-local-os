@@ -27,6 +27,7 @@ from worker.jobs import JobContext, resolve
 from worker.local_llm import StructuredLLM
 from worker.logs import get_logger
 from worker.slack import AlertSink, format_job_failed
+from worker.system_sync import sync_systems
 
 log = get_logger(__name__)
 
@@ -48,6 +49,7 @@ class Worker:
         self.host = socket.gethostname()
         self.started_at = datetime.now(UTC)
         self._stop = threading.Event()
+        self._stop_requested = False
         self._current_job_id: str | None = None
         self._lock = threading.Lock()
         self._ctx = JobContext(
@@ -56,6 +58,7 @@ class Worker:
 
     # ----------------------------------------------------------------- lifecycle
     def stop(self, *_: object) -> None:
+        self._stop_requested = True
         self._stop.set()
 
     def install_signal_handlers(self) -> None:
@@ -64,8 +67,11 @@ class Worker:
 
     def run(self, *, max_jobs: int | None = None, idle_exit: bool = False) -> int:
         """Run until stopped. Returns the number of jobs processed."""
+        if self._stop_requested:
+            return 0  # SIGTERM arrived before this slot started
         self._stop.clear()
         conn = self._connect(self.settings.database_url)
+        sync_systems(conn)
         hb = threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True)
         hb.start()
         self._emit(conn, "worker.started")
@@ -73,7 +79,7 @@ class Worker:
         processed = 0
         last_reap = 0.0
         try:
-            while not self._stop.is_set():
+            while not self._stop.is_set() and not self._stop_requested:
                 if time.monotonic() - last_reap >= self.settings.worker_reap_interval_s:
                     self._reap(conn)
                     last_reap = time.monotonic()

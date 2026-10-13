@@ -1,0 +1,67 @@
+# Chosen Local's business profile. Seeds the Ledger (python3 -m worker.bootstrap).
+# The bootstrap only adds what is missing; once seeded, change these in the console.
+
+[business]
+name = "Chosen Local"
+
+# The profile is the list of founders: an active founder not named here is deactivated.
+[[founders]]
+name = "sam"
+
+[[founders]]
+name = "jack"
+
+[[markets]]
+key = "denver"
+name = "Denver"
+time_zone = "America/Denver"
+
+# Launch need-states (decisions item 1, Oct 13): where marketing goes first.
+# Coaches may cover any active need-state. What each covers and does not cover is
+# business input B2 (docs/inputs/need-states.md); fill it in the console.
+[[need_states]]
+key = "fitness"
+label = "Fitness, performance, accountability"
+launch_in = ["denver"]
+
+[[need_states]]
+key = "life_direction"
+label = "Life direction, discipline, personal development"
+launch_in = ["denver"]
+
+# The business plan's proposed vetting file (section 9), loaded as a DRAFT.
+# Decisions item 2 is open: a founder changes it if needed and activates it in the
+# console. No coach can be activated until a standard is active.
+[vetting_standard]
+version = 1
+title = "Draft from business plan section 9"
+
+[[vetting_standard.items]]
+key = "interview"
+label = "Recorded founder interview"
+evidence_kind = "file"
+
+[[vetting_standard.items]]
+key = "reference_1"
+label = "Client reference 1, spoken to by a founder"
+evidence_kind = "any"
+
+[[vetting_standard.items]]
+key = "reference_2"
+label = "Client reference 2, spoken to by a founder"
+evidence_kind = "any"
+
+[[vetting_standard.items]]
+key = "paying_client_evidence"
+label = "Evidence of paying clients"
+evidence_kind = "any"
+
+[[vetting_standard.items]]
+key = "program_and_price"
+label = "Written program and price"
+evidence_kind = "any"
+
+[[vetting_standard.items]]
+key = "signed_agreement"
+label = "Signed partner agreement, including the scope boundary"
+evidence_kind = "file"

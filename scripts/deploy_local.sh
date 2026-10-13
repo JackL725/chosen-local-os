@@ -5,14 +5,16 @@
 #
 # What it does, in order:
 #   1. refuses to run with uncommitted changes (production is always a commit);
-#   2. creates the `clworker` system user and its private folders if missing;
+#   2. creates the `clworker` and `clconsole` system users, the `clprivate` group they share,
+#      and the private folders, if missing; sets the folders' group access;
 #   3. exports HEAD into /opt/chosen-local-releases/<sha>, builds its virtualenv with
 #      the system Python 3.12, and points the /opt/chosen-local symlink at it;
 #   4. installs the systemd units and enables them at boot;
 #   5. creates worker.env from the example (names only) if it does not exist yet, and
 #      stops there so you can fill it in;
 #   6. restarts the services and shows their state.
-# It never reads worker.env's values and never touches /home/clworker/cl-private.
+# It never reads worker.env's or console.env's values. It changes cl-private's group and
+# permissions once, the first time it finds the folder without the clprivate group.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -42,9 +44,34 @@ if ! id clworker >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /home/clworker --shell /usr/sbin/nologin clworker
   echo "Created system user clworker."
 fi
-install -d -o clworker -g clworker -m 700 /home/clworker
-install -d -o clworker -g clworker -m 700 /home/clworker/cl-private /home/clworker/cl-private/evals
+# The review console runs as its own user so the worker can never read its database login
+# (the only one that may act as a founder). The two share cl-private through clprivate.
+getent group clprivate >/dev/null || groupadd --system clprivate
+if ! id clconsole >/dev/null 2>&1; then
+  useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin clconsole
+  echo "Created system user clconsole."
+fi
+usermod -a -G clprivate clworker
+usermod -a -G clprivate clconsole
+# /home/clworker: clprivate may pass through it to cl-private, but not list it.
+install -d -o clworker -g clprivate -m 710 /home/clworker
+# cl-private: owned by root, group clprivate, setgid (new folders keep the group) and sticky
+# (each user can rename or delete only its own folders). Each user's files are group-readable
+# but not group-writable (UMask=0027), so the worker can read the console's evidence for the
+# backup but cannot change it, and the console can read the worker's files but not change them.
+PRIV=/home/clworker/cl-private
+if [ -d "$PRIV" ] && [ "$(stat -c %G "$PRIV")" != clprivate ]; then
+  # One-time move from Phase 0 (clworker:clworker 700). Later runs leave files alone, so
+  # their ctime does not change and restic does not re-read them.
+  chgrp -R clprivate "$PRIV"
+  find "$PRIV" -type d -exec chmod 2750 {} +
+  find "$PRIV" -type f -exec chmod g+r,g-w,o-rwx {} +
+  echo "Gave clprivate read access to $PRIV (one-time)."
+fi
+install -d -o root -g clprivate -m 3770 "$PRIV"
+[ -d "$PRIV/evals" ] || install -d -o clworker -g clprivate -m 2750 "$PRIV/evals"
 install -d -o clworker -g clworker -m 700 /home/clworker/.config /home/clworker/.config/chosen-local
+install -d -o root -g root -m 700 /etc/chosen-local
 
 # --- 3. release ------------------------------------------------------------------
 RELEASES=/opt/chosen-local-releases
@@ -56,7 +83,7 @@ if [ ! -d "$DEST" ]; then
   echo "GIT_SHA=$SHA" > "$TMP/REVISION.env"
   (cd "$TMP" && UV_CACHE_DIR=/var/cache/chosen-local-uv UV_PYTHON_DOWNLOADS=never \
      "$UV" sync --no-dev --python "$PY" --quiet)
-  "$TMP/.venv/bin/python" -m compileall -q "$TMP/worker" "$TMP/review" "$TMP/evals" >/dev/null
+  "$TMP/.venv/bin/python" -m compileall -q "$TMP/worker" "$TMP/review" "$TMP/evals" "$TMP/systems" >/dev/null
   chown -R root:root "$TMP"
   chmod -R go-w "$TMP"
   chmod -R a+rX "$TMP"
@@ -81,6 +108,26 @@ if [ ! -f "$ENVFILE" ]; then
   exit 0
 fi
 chown clworker:clworker "$ENVFILE"; chmod 600 "$ENVFILE"
+# The console's login must never be where clworker can read it. Earlier drafts of the
+# Phase 1 steps put it in worker.env or in ~clworker/.config; refuse to go on if either is there.
+OLD_CONSOLE_ENV=/home/clworker/.config/chosen-local/console.env
+if [ -e "$OLD_CONSOLE_ENV" ] || grep -q '^CONSOLE_DATABASE_URL=' "$ENVFILE"; then
+  echo "The console's database login is in a file clworker can read:" >&2
+  [ -e "$OLD_CONSOLE_ENV" ] && echo "  $OLD_CONSOLE_ENV  (delete it: sudo rm $OLD_CONSOLE_ENV)" >&2
+  grep -q '^CONSOLE_DATABASE_URL=' "$ENVFILE" && echo "  CONSOLE_DATABASE_URL in $ENVFILE  (delete that line)" >&2
+  echo "It belongs only in /etc/chosen-local/console.env. Then rotate it on the VPS with" >&2
+  echo "deploy/postgres/create_console_login.sh, since clworker may have read it." >&2
+  exit 1
+fi
+CONSOLE_ENV=/etc/chosen-local/console.env
+if [ ! -f "$CONSOLE_ENV" ]; then
+  install -o root -g root -m 600 "$DEST/deploy/console.env.example" "$CONSOLE_ENV"
+  echo
+  echo "Created $CONSOLE_ENV from the example (names only, root only)."
+  echo "Fill in the values (deploy/PHASE1.md, workstation step W2), then run this script again."
+  exit 0
+fi
+chown root:root "$CONSOLE_ENV"; chmod 600 "$CONSOLE_ENV"
 
 # --- 6. restart -------------------------------------------------------------------
 systemctl restart llama-server.service cl-review.service

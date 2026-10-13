@@ -17,7 +17,7 @@ a workflow, open each node that needs a credential and select it, then activate.
 | Workflow | Trigger | What it does | Notes |
 | --- | --- | --- | --- |
 | `error-handler` | any workflow fails | writes a `workflow.failed` event (IDs only) and posts the workflow name, execution ID and node to Slack | Set it as the **Error workflow** in every other workflow's settings. |
-| `stale-job-alert` | every 15 min | reads `api.queue_health(4, 15, 240)`; posts to Slack when the oldest pending job is older than 4 h, then every 4 h while it stays stale | **4 h is a placeholder** until decisions item 24 is DONE. |
+| `stale-job-alert` | every 15 min | reads `api.queue_health(15)`; posts to Slack when the oldest pending job is older than the threshold (setting `core.stale_job_alert_hours`, 4 h, decisions item 24), then every 4 h while it stays stale. Jobs of systems that are turned off are counted as paused and never alert. | Re-import after migration 2: the old `queue_health(4, 15, 240)` call no longer exists. |
 
 ## After every change
 

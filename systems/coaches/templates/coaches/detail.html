@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ coach.display_name }}{% endblock %}
+{% block content %}
+<h1>{{ coach.display_name }}</h1>
+{% include "coaches/_subnav.html" %}
+<div class="panel">
+  <div class="row" style="align-items: center">
+    <div><span class="chip {{ 'on' if coach.status == 'active' else ('warn' if coach.status == 'vetting' else '') }}">{{ coach.status }}</span>
+      {% if coach.status_changed_by_name %}<span class="small muted">by {{ coach.status_changed_by_name }}, {{ coach.status_changed_at|when('%b %d %Y') }}</span>{% endif %}</div>
+    {% for move in moves if not (move == 'active' and coach.standard_status not in ('active', 'retired')) %}
+    <form method="post" action="{{ path_for('coaches:status', coach_id=coach.id|string) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="status" value="{{ move }}">
+      <button class="{{ 'danger' if move in ('removed', 'paused') else ('' if move in ('active', 'vetting') else 'secondary') }}" type="submit">
+        {{ {'vetting': 'Start vetting', 'active': 'Mark active', 'paused': 'Pause', 'removed': 'Remove', 'prospect': 'Back to prospect'}[move] }}</button>
+    </form>
+    {% endfor %}
+    <a class="small" href="{{ path_for('timeline', entity_type='coaches', entity_id=coach.id|string) }}">history</a>
+  </div>
+  {% if coach.status == 'vetting' and coach.standard_status != 'active' %}
+    <p class="small"><span class="chip warn">draft standard</span> This coach is being vetted under a draft. They can be marked active once a founder activates a standard (Vetting standards).</p>
+  {% endif %}
+</div>
+
+{% if coach.vetting_standard_id %}
+<h2>Vetting file <span class="muted small">standard v{{ coach.standard_version }} · {{ coach.standard_title }} · {{ coach.standard_status }}</span></h2>
+<table>
+  <tr><th>Item</th><th>Evidence</th><th>Verified</th></tr>
+  {% for it in items %}
+  <tr>
+    <td><strong>{{ it.label or it.item_type }}</strong>{% if not it.required %} <span class="chip">optional</span>{% endif %}
+        {% if it.stale %} <span class="chip warn">from an earlier standard</span>{% endif %}
+        {% if it.description %}<br><span class="small muted">{{ it.description }}</span>{% endif %}
+        <br><span class="small muted">evidence: {{ it.evidence_kind or 'any' }}</span></td>
+    <td class="small">
+      {% for e in evidence.get(it.id|string, []) %}
+        <div style="margin-bottom: 6px">
+          {% if e.kind == 'file' %}<a href="{{ path_for('coaches:download', evidence_id=e.id|string) }}">{{ e.display_name }}</a>
+            <span class="muted">{{ (e.size_bytes / 1024)|round(0)|int }} KB</span>
+          {% else %}<span style="white-space: pre-wrap">{{ e.note }}</span>{% endif %}
+          <span class="muted">· {{ e.uploaded_by_name }}, {{ e.created_at|when('%b %d') }}</span>
+          <form class="inline" method="post" action="{{ path_for('coaches:remove', coach_id=coach.id|string, evidence_id=e.id|string) }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary small" type="submit">remove</button></form>
+        </div>
+      {% endfor %}
+      <details><summary>Add evidence</summary>
+        <form method="post" enctype="multipart/form-data" action="{{ path_for('coaches:upload', coach_id=coach.id|string, item_id=it.id|string) }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>File (up to {{ max_mb }} MB; stays on the workstation)</label><input type="file" name="file" required>
+          <button class="secondary" type="submit">Upload</button></form>
+        <form method="post" action="{{ path_for('coaches:note', coach_id=coach.id|string, item_id=it.id|string) }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>Or a note (who you spoke to, what they said)</label><textarea name="note" required></textarea>
+          <button class="secondary" type="submit">Add note</button></form>
+      </details>
+    </td>
+    <td>
+      {% if it.verified_at %}
+        <span class="chip on">verified</span><br><span class="small muted">{{ it.verified_by_name }}, {{ it.verified_at|when('%b %d %Y') }}</span>
+        {% if coach.status != 'active' %}
+        <form method="post" action="{{ path_for('coaches:verify', coach_id=coach.id|string, item_id=it.id|string) }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="unverify">
+          <button class="secondary small" type="submit">Un-verify</button></form>
+        {% endif %}
+      {% elif not it.stale %}
+        {% set have = evidence.get(it.id|string, []) %}
+        {% set kinds = have|map(attribute='kind')|list %}
+        {% if (it.evidence_kind == 'file' and 'file' not in kinds) or (it.evidence_kind == 'note' and 'note' not in kinds) or not have %}
+          <span class="chip">needs {{ 'a file' if it.evidence_kind == 'file' else ('a note' if it.evidence_kind == 'note' else 'evidence') }}</span>
+        {% else %}
+        <form method="post" action="{{ path_for('coaches:verify', coach_id=coach.id|string, item_id=it.id|string) }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Verify as {{ founder.name }}</button></form>
+        {% endif %}
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% if coach.status != 'active' and standards|length > 1 %}
+<details style="margin-top: 10px"><summary>Move to another standard</summary>
+  <form class="row panel" method="post" action="{{ path_for('coaches:standard', coach_id=coach.id|string) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div><label for="standard_id">Standard</label><select id="standard_id" name="standard_id">
+      {% for s in standards if s.id != coach.vetting_standard_id %}<option value="{{ s.id }}">v{{ s.version }} · {{ s.title }} ({{ s.status }})</option>{% endfor %}</select></div>
+    <div><button class="secondary" type="submit">Move</button></div>
+    <p class="small muted" style="flex-basis: 100%">Items with the same key carry over with their evidence and verification.</p>
+  </form>
+</details>
+{% endif %}
+{% endif %}
+
+<h2>Profile</h2>
+<form method="post" action="{{ path_for('coaches:update', coach_id=coach.id|string) }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% include "coaches/_form_fields.html" %}
+  <p><button type="submit">Save profile</button> <span class="small muted">Saving confirms the open capacity as of today.</span></p>
+</form>
+{% endblock %}

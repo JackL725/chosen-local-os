@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Systems{% endblock %}
+{% block content %}
+<h1>Systems</h1>
+<p class="lede">Each AI system can be turned on or off. Turning one off pauses its jobs; they run when it is turned back on. Required systems stay on.</p>
+<table>
+  <tr><th>System</th><th>State</th><th>Data</th><th>Jobs, prompts and models</th><th></th></tr>
+  {% for it in items %}
+  {% set m = it.manifest %}
+  <tr>
+    <td><strong>{{ m.title }}</strong> <span class="muted small">v{{ m.version }}</span><br><span class="small muted">{{ m.description }}</span></td>
+    <td>
+      {% if not it.registered %}<span class="chip warn">not registered</span>
+      {% elif it.enabled %}<span class="chip on">on</span>{% else %}<span class="chip off">off</span>{% endif %}
+      {% if m.required %}<span class="chip">required</span>{% endif %}
+    </td>
+    <td><span class="chip">{{ m.data_class }}</span></td>
+    <td class="small">
+      {% for j in m.jobs %}<code>{{ j.job_type }}</code> {% endfor %}
+      {% if m.prompts %}<br>prompts: {% for p in m.prompts %}{{ p.name }}.v{{ p.version }} {% endfor %}{% endif %}
+      {% if it.models %}<br>models: {% for name, profile, kind in it.models %}{{ name }} → {{ profile }} ({{ kind }}) {% endfor %}{% endif %}
+    </td>
+    <td>
+      {% if it.registered and not m.required %}
+      <form method="post" action="{{ path_for('systems_toggle', key=m.key) }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% if it.enabled %}
+          <button class="danger" type="submit">Turn off</button>
+        {% else %}
+          <input type="hidden" name="enabled" value="on"><button type="submit">Turn on</button>
+        {% endif %}
+      </form>
+      {% endif %}
+      {% if it.registered %}<a class="small" href="{{ path_for('timeline', entity_type='systems', entity_id=m.key) }}">history</a>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

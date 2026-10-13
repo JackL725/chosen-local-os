@@ -5,9 +5,13 @@ description = "The AI operating system for Chosen Local: worker, review console 
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "httpx>=0.27",
+    "jinja2>=3.1.4",
     "psycopg[binary,pool]>=3.2",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
+    "python-multipart>=0.0.20",
+    "starlette>=1.6,<2",
+    "uvicorn>=0.30",
 ]
 
 [dependency-groups]
@@ -33,7 +37,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S311", "E501", "RUF012"]  # long SQL literals read better unwrapped
+"tests/**" = ["S105", "S106", "S311", "S608", "E501", "RUF012"]  # long SQL literals read better unwrapped
+# The bootstrap prints SQL for psql on the VPS. Every value passes through _lit(), and
+# tests/db/test_phase1_schema.py::test_profile_text_is_quoted_safely covers it.
+"worker/bootstrap.py" = ["S608"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

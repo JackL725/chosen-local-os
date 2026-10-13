@@ -30,10 +30,6 @@ class Settings(BaseSettings):
     local_llm_thinking: bool = False
     local_llm_timeout_s: float = 120.0
 
-    # Prompt versions in use, "<system>/<name>" -> N for prompts/<system>/<name>.vN.md.
-    # Switch a version only when its evals hold or improve (.claude/rules/prompts.md).
-    prompt_versions: dict[str, int] = Field(default_factory=lambda: {"healthcheck/echo": 1})
-
     # Private data. Required, never defaulted: in dev it points at evals/synthetic.
     private_data_dir: Path
 
@@ -49,6 +45,9 @@ class Settings(BaseSettings):
     worker_reap_interval_s: float = 60.0
     worker_retry_base_s: float = 30.0
     worker_enable_test_jobs: bool = False
+    # Jobs run at once, one slot each (its own worker_id, connection and heartbeat).
+    # Match LLAMA_PARALLEL so every slot gets a model slot.
+    worker_concurrency: int = Field(default=1, ge=1, le=16)
     git_sha: str = ""
 
     @field_validator("local_llm_base_url")
@@ -65,6 +64,15 @@ class Settings(BaseSettings):
         if str(value).strip() == "":
             raise ValueError("PRIVATE_DATA_DIR must be set")
         return value
+
+
+# Model profiles. A system's manifest binds each thing it asks a model to do to one of
+# these by name (systems/_contract.py ModelUse). Endpoints and model names come from the
+# environment above; this table only says where each profile runs. A cloud profile is
+# added here, behind worker/cloud_llm.py, when the first system that may use one exists.
+MODEL_PROFILES: dict[str, str] = {
+    "local": "local",  # llama-server at LOCAL_LLM_BASE_URL, model LOCAL_LLM_MODEL
+}
 
 
 @lru_cache(maxsize=1)

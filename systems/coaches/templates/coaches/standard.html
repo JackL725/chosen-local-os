@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Standard v{{ std.version }}{% endblock %}
+{% block content %}
+<h1>Standard v{{ std.version }} · {{ std.title }}</h1>
+{% include "coaches/_subnav.html" %}
+<p><span class="chip {{ 'on' if std.status == 'active' else ('warn' if std.status == 'draft' else '') }}">{{ std.status }}</span>
+  {% if std.activated_at %}<span class="small muted">activated by {{ std.activated_by_name }}, {{ std.activated_at|when('%b %d %Y') }}</span>{% endif %}
+  <a class="small" href="{{ path_for('timeline', entity_type='vetting_standards', entity_id=std.id|string) }}">history</a></p>
+<table>
+  <tr><th>Item</th><th>Evidence</th><th>Required</th>{% if std.status == 'draft' %}<th></th>{% endif %}</tr>
+  {% for t in types %}
+  <tr><td><strong>{{ t.label }}</strong> <code class="small">{{ t.key }}</code>{% if t.description %}<br><span class="small muted">{{ t.description }}</span>{% endif %}</td>
+      <td>{{ t.evidence_kind }}</td><td>{{ 'yes' if t.required else 'optional' }}</td>
+      {% if std.status == 'draft' %}<td>
+        <form method="post" action="{{ path_for('coaches:standard_item', standard_id=std.id|string) }}">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="delete" value="{{ t.id }}">
+          <button class="danger small" type="submit">Remove</button></form></td>{% endif %}</tr>
+  {% else %}<tr><td colspan="4" class="muted">No items yet.</td></tr>{% endfor %}
+</table>
+{% if std.status == 'draft' %}
+<h2>Add or edit an item</h2>
+<form method="post" action="{{ path_for('coaches:standard_item', standard_id=std.id|string) }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <p class="small muted">Use an existing key to edit that item.</p>
+  <div class="row">
+    <div><label for="key">Key</label><input id="key" name="key" type="text" placeholder="background_check" required style="max-width: 220px"></div>
+    <div style="flex: 1"><label for="label">Label</label><input id="label" name="label" type="text" required></div>
+  </div>
+  <label for="description">What counts as evidence</label><input id="description" name="description" type="text">
+  <div class="row">
+    <div><label for="evidence_kind">Evidence</label><select id="evidence_kind" name="evidence_kind"><option>any</option><option>file</option><option>note</option></select></div>
+    <div><label for="required">Required</label><select id="required" name="required"><option value="on">Yes</option><option value="">Optional</option></select></div>
+    <div><label for="sort_order">Order</label><input id="sort_order" name="sort_order" type="number" value="100" style="max-width: 90px"></div>
+  </div>
+  <p><button class="secondary" type="submit">Save item</button></p>
+</form>
+<div class="panel">
+  <form class="inline" method="post" action="{{ path_for('coaches:standard_state', standard_id=std.id|string) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="activate">
+    <button type="submit">Activate as {{ founder.name }}</button></form>
+  <span class="small muted">Retires the current active standard. Recorded with your name.</span>
+  <form class="inline" method="post" action="{{ path_for('coaches:standard_state', standard_id=std.id|string) }}" style="margin-left: 18px">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="discard">
+    <button class="danger" type="submit">Discard draft</button></form>
+</div>
+{% endif %}
+{% endblock %}

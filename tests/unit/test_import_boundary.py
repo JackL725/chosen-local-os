@@ -22,7 +22,7 @@ from pathlib import Path
 from worker import cloud_llm
 
 ROOT = Path(__file__).resolve().parents[2]
-CODE_DIRS = ("worker", "review", "evals", "scripts")
+CODE_DIRS = ("worker", "review", "evals", "scripts", "systems")
 CLOUD_MODULE = "worker.cloud_llm"
 CLOUD_SDKS = (
     "anthropic",
@@ -162,6 +162,16 @@ def test_repository_respects_the_cloud_boundary():
 def test_job_registry_does_not_import_handlers_eagerly():
     modules = scan(ROOT, CODE_DIRS)
     assert not any(i.startswith("worker.jobs.") for i in modules["worker.jobs"].imports)
+    # The system registry reads manifests only; handlers are imported by name.
+    for name in ("systems", "systems._contract"):
+        eager = [
+            i
+            for i in modules[name].imports
+            if i.startswith("systems.")
+            and i != "systems._contract"
+            and not i.startswith("systems._contract.")
+        ]
+        assert eager == [], (name, eager)
 
 
 def _write(root: Path, rel: str, text: str) -> None:

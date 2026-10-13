@@ -83,16 +83,27 @@ def enqueue(
 
 
 def claim(conn: psycopg.Connection, worker_id: str, lease_s: int) -> Job | None:
+    """Claim the next due job, skipping jobs of systems that are turned off.
+
+    Those jobs wait (api.queue_health counts them apart and never alerts on them) and
+    run once a founder turns the system back on. Job types no system declares are still
+    claimed, so a typo fails loudly with UnknownJobType instead of waiting silently.
+    """
     with transaction(conn, actor=ACTOR), conn.cursor() as cur:
         cur.execute(
             """UPDATE jobs
                   SET status = 'running', claimed_by = %(w)s, claimed_at = now(),
                       lease_expires_at = now() + make_interval(secs => %(lease)s),
                       attempts = attempts + 1
-                WHERE id = (SELECT id FROM jobs
-                             WHERE status = 'pending' AND run_after <= now()
-                             ORDER BY priority, run_after
-                             FOR UPDATE SKIP LOCKED
+                WHERE id = (SELECT j.id FROM jobs j
+                             WHERE j.status = 'pending' AND j.run_after <= now()
+                               AND NOT EXISTS (
+                                     SELECT 1 FROM system_job_types t
+                                       JOIN systems s ON s.key = t.system_key
+                                      WHERE t.job_type = j.job_type
+                                        AND NOT (s.enabled OR s.required))
+                             ORDER BY j.priority, j.run_after
+                             FOR UPDATE OF j SKIP LOCKED
                              LIMIT 1)
             RETURNING *""",
             {"w": worker_id, "lease": lease_s},

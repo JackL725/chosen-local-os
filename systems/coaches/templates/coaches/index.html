@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Coaches{% endblock %}
+{% block content %}
+<h1>Coaches</h1>
+{% include "coaches/_subnav.html" %}
+<form method="get" class="row panel">
+  <div><label for="status">Status</label>
+    <select id="status" name="status">
+      <option value="">all but removed</option>
+      {% for s in statuses %}<option {{ 'selected' if s == status else '' }}>{{ s }}</option>{% endfor %}
+      <option value="all" {{ 'selected' if status == 'all' else '' }}>everything</option>
+    </select></div>
+  <div><label for="need_state">Need-state</label>
+    <select id="need_state" name="need_state"><option value="">any</option>
+      {% for n in need_states %}<option value="{{ n.key }}" {{ 'selected' if n.key == need_state else '' }}>{{ n.label }}</option>{% endfor %}
+    </select></div>
+  {% if markets|length > 1 %}
+  <div><label for="market">Market</label>
+    <select id="market" name="market"><option value="">any</option>
+      {% for m in markets %}<option value="{{ m.key }}" {{ 'selected' if m.key == market else '' }}>{{ m.name }}</option>{% endfor %}
+    </select></div>
+  {% endif %}
+  <div><button class="secondary" type="submit">Filter</button></div>
+</form>
+{% if coaches %}
+<table>
+  <tr><th>Coach</th><th>Status</th><th>Need-states</th><th>Price / length</th><th>Capacity</th><th>Vetting</th></tr>
+  {% for c in coaches %}
+  <tr>
+    <td><a href="{{ path_for('coaches:detail', coach_id=c.id|string) }}"><strong>{{ c.display_name }}</strong></a>
+        {% if markets|length > 1 %}<br><span class="small muted">{{ c.market_key }}</span>{% endif %}</td>
+    <td><span class="chip {{ 'on' if c.status == 'active' else ('off' if c.status == 'removed' else ('warn' if c.status == 'vetting' else '')) }}">{{ c.status }}</span></td>
+    <td>{% for n in c.need_states %}<span class="chip">{{ n }}</span>{% endfor %}</td>
+    <td class="small">{% if c.price_per_month_cents is not none %}${{ '{:,.0f}'.format(c.price_per_month_cents / 100) }}/mo{% else %}–{% endif %}
+        {% if c.program_length_months %} · {{ c.program_length_months }} mo{% endif %}</td>
+    <td class="small">{{ c.capacity_open if c.capacity_open is not none else '–' }}
+        {% if c.capacity_confirmed_at %}<br><span class="muted">confirmed {{ c.capacity_confirmed_at|when('%b %d') }}</span>{% endif %}</td>
+    <td class="small">{% if c.required %}{{ c.verified }} / {{ c.required }} verified{% else %}<span class="muted">not started</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="panel"><p>No coaches yet. <a href="{{ path_for('coaches:new') }}">Add one</a> or <a href="{{ path_for('coaches:import') }}">import a CSV</a>.</p></div>
+{% endif %}
+{% endblock %}

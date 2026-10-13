@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Import coaches{% endblock %}
+{% block content %}
+<h1>Import coaches</h1>
+{% include "coaches/_subnav.html" %}
+{% if rows is none %}
+<p class="lede">A CSV with a header row. Only <code>display_name</code> is required. Coaches arrive as prospects; nothing is written until you confirm the preview.</p>
+<p class="small">Columns: {% for c in columns %}<code>{{ c }}</code> {% endfor %}<br>
+  <code>need_states</code> takes keys separated by <code>;</code>. <code>price_per_month</code> is in dollars. <code>serves_remote</code> is yes or no.</p>
+<form method="post" enctype="multipart/form-data" action="{{ path_for('coaches:import_preview') }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="file">CSV file (up to 1 MB)</label><input id="file" type="file" name="file" accept=".csv,text/csv" required>
+  <p><button type="submit">Preview</button></p>
+</form>
+{% else %}
+{% set bad = rows|selectattr('error')|list %}
+<p class="lede">{{ rows|length }} rows{% if bad %}, <strong>{{ bad|length }} with errors</strong>: fix the file and preview again{% else %}, all valid{% endif %}.</p>
+<table>
+  <tr><th>Line</th><th>Coach</th><th>Need-states</th><th>Problem</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ r.line }}</td><td>{{ r.fields.display_name if r.fields else '' }}</td>
+      <td>{% if r.fields %}{% for n in r.fields.need_states %}<span class="chip">{{ n }}</span>{% endfor %}{% endif %}</td>
+      <td>{% if r.error %}<span class="chip err">{{ r.error }}</span>{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% if not bad %}
+<form method="post" action="{{ path_for('coaches:import_preview') }}" style="margin-top: 14px">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
+  <textarea name="csv_text" hidden>{{ csv_text }}</textarea>
+  <button type="submit">Import {{ rows|length }} coaches</button>
+  <a href="{{ path_for('coaches:import') }}">Start over</a>
+</form>
+{% else %}<p><a href="{{ path_for('coaches:import') }}">Start over</a></p>{% endif %}
+{% endif %}
+{% endblock %}

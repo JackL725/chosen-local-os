@@ -8,6 +8,8 @@ The AI systems that run Chosen Local, built with Claude Code (Opus) against the 
 - `docs/business-plan-v1.1.md`: the source of truth
 - `docs/build-plan.md`: phases, specs, acceptance tests and a kickoff prompt for each phase
 - `docs/phase-0-design.md`: the Phase 0 design as built (schema, decisions, trade-offs)
+- `docs/phase-1-design.md`: the Phase 1 plan and what changed as it was built
+- `deploy/PHASE1.md`: Phase 1 deploy steps and acceptance tests
 - `docs/decisions.md`: business inputs only the founders can supply, and their status
 - `docs/inputs/`: where those inputs go
 - `docs/runbook.md`: start, stop, health, recovery and restore tests for every component
@@ -18,8 +20,9 @@ The AI systems that run Chosen Local, built with Claude Code (Opus) against the 
 | Path | What |
 | --- | --- |
 | `db/migrations/` | Ledger schema (dbmate, forward-only SQL); `db/schema.sql` is the dump |
-| `worker/` | job worker: queue, local model client, cloud boundary, logging, Slack alerts, job handlers |
-| `review/` | review console (Phase 0: `/healthz` placeholder) |
+| `worker/` | job worker: queue, local model client, cloud boundary, logging, Slack alerts, bootstrap |
+| `systems/` | one folder per AI system, each with a data-only manifest (`docs/systems.md`) |
+| `review/` | review console: sign-in, core screens; systems add theirs under `/s/<key>/` |
 | `prompts/<system>/<name>.vN.md` | versioned prompts; the version in use is set in `worker/config.py` |
 | `evals/` | `python -m evals.run <system>` over `evals/synthetic/` |
 | `n8n/workflows/` | exported workflows (no credentials) |

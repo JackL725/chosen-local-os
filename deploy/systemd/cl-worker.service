@@ -7,6 +7,8 @@ OnFailure=cl-unit-failed@%n.service
 [Service]
 User=clworker
 Group=clworker
+SupplementaryGroups=clprivate
+UMask=0027
 WorkingDirectory=/opt/chosen-local
 EnvironmentFile=/home/clworker/.config/chosen-local/worker.env
 EnvironmentFile=-/opt/chosen-local/REVISION.env

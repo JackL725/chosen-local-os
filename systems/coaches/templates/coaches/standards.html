@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Vetting standards{% endblock %}
+{% block content %}
+<h1>Vetting standards</h1>
+{% include "coaches/_subnav.html" %}
+<p class="lede">What "vetted" means, item by item. A draft can be edited; activating it is the founders' decision on the standard (decisions item 2). An active standard is fixed: to change it, start a new draft, which begins as a copy. Coaches already active keep the standard they were vetted under.</p>
+<table>
+  <tr><th>Version</th><th>Status</th><th>Items</th><th>Coaches on it</th><th>Activated</th></tr>
+  {% for s in standards %}
+  <tr><td><a href="{{ path_for('coaches:standard_detail', standard_id=s.id|string) }}">v{{ s.version }} · {{ s.title }}</a></td>
+      <td><span class="chip {{ 'on' if s.status == 'active' else ('warn' if s.status == 'draft' else '') }}">{{ s.status }}</span></td>
+      <td>{{ s.items }}</td><td>{{ s.coaches }}</td>
+      <td class="small">{% if s.activated_at %}{{ s.activated_by_name }}, {{ s.activated_at|when('%b %d %Y') }}{% endif %}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">None yet. Run the bootstrap, or start a draft below.</td></tr>{% endfor %}
+</table>
+<form method="post" action="{{ path_for('coaches:standard_new') }}" class="row panel" style="margin-top: 14px">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div style="flex: 1"><label for="title">New draft title</label><input id="title" name="title" type="text" placeholder="Standard with background checks"></div>
+  <div><button class="secondary" type="submit">Start a draft</button></div>
+</form>
+{% endblock %}

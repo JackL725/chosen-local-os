@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FILES = [
     ROOT / ".env.example",
     ROOT / "deploy" / "worker.env.example",
+    ROOT / "deploy" / "console.env.example",
     ROOT / "deploy" / "vps.env.example",
 ]
 SECRETISH = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|WEBHOOK)", re.IGNORECASE)

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>{% block title %}{{ title | default("Review console") }}{% endblock %} · {{ business_name }}</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  <header class="top">
+    <span class="brand">{{ business_name }}</span>
+    <nav>
+      {% set here = request.url.path %}
+      <a href="{{ path_for('home') }}" class="{{ 'here' if here == '/' else '' }}">Home</a>
+      {% for item in nav %}
+        <a href="{{ item.path }}" class="{{ 'here' if here.startswith(item.path) else '' }}">{{ item.title }}</a>
+      {% endfor %}
+      <a href="{{ path_for('need_states') }}" class="{{ 'here' if here.startswith('/need-states') else '' }}">Need-states</a>
+      <a href="{{ path_for('markets') }}" class="{{ 'here' if here.startswith('/markets') else '' }}">Markets</a>
+      <a href="{{ path_for('systems') }}" class="{{ 'here' if here.startswith('/systems') else '' }}">Systems</a>
+      <a href="{{ path_for('settings') }}" class="{{ 'here' if here.startswith('/settings') else '' }}">Settings</a>
+    </nav>
+    <span class="who">
+      <a href="{{ path_for('account') }}">{{ founder.name }}</a>
+      <form class="inline" method="post" action="{{ path_for('signout') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary" type="submit">Sign out</button>
+      </form>
+    </span>
+  </header>
+  <main>
+    {% if flash %}<div class="flash {{ flash_kind }}" role="status">{{ flash }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

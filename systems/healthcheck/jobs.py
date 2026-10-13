@@ -6,12 +6,12 @@ import re
 
 from pydantic import BaseModel, ConfigDict
 
+from systems.healthcheck.manifest import MANIFEST
 from worker import prompts
 from worker.errors import ModelOutputInvalid
 from worker.jobs import JobContext, JobResult
 from worker.queue import Job
 
-PROMPT_KEY = "healthcheck/echo"
 _NONCE = re.compile(r"^[A-Za-z0-9]{6,64}$")
 
 
@@ -29,8 +29,7 @@ def handle(job: Job, ctx: JobContext) -> JobResult:
     nonce = str(job.payload.get("nonce", ""))
     if not _NONCE.match(nonce):
         raise BadPayload()
-    system, name = PROMPT_KEY.split("/")
-    prompt = prompts.load(system, name, ctx.settings.prompt_versions[PROMPT_KEY])
+    prompt = prompts.load(MANIFEST.key, "echo", MANIFEST.prompt_version("echo"))
     result = ctx.llm.complete(
         [
             {"role": "system", "content": prompt.text},

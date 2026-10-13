@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Need-states{% endblock %}
+{% block content %}
+<h1>Need-states</h1>
+<p class="lede">What prospects come for. Coaches can cover any active need-state. A need-state <strong>launched</strong> in a market is one marketing goes to first, and the one the coach readiness view counts toward the gate.</p>
+<table>
+  <tr><th>Need-state</th><th>Covers / not covered</th><th>Coaches</th>{% for m in markets if m.active %}<th>{{ m.name }}</th>{% endfor %}</tr>
+  {% for s in states %}
+  <tr>
+    <td><strong>{{ s.label }}</strong> {% if not s.active %}<span class="chip off">inactive</span>{% endif %}<br><code class="small">{{ s.key }}</code></td>
+    <td class="small">{% if s.covers %}{{ s.covers }}{% else %}<span class="chip warn">covers: not written</span>{% endif %}
+        {% if s.not_covered %}<br><span class="muted">Not: {{ s.not_covered }}</span>{% endif %}</td>
+    <td>{{ counts.get(s.key, 0) }}</td>
+    {% for m in markets if m.active %}
+    <td>
+      <form method="post" action="{{ path_for('need_state_launch') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="market" value="{{ m.key }}">
+        <input type="hidden" name="need_state" value="{{ s.key }}">
+        {% if (m.key, s.key) in launched %}
+          <span class="chip on">launched</span> <button class="secondary small" type="submit">Stop</button>
+        {% else %}
+          <input type="hidden" name="launched" value="on"><button class="secondary small" type="submit">Launch</button>
+        {% endif %}
+      </form>
+    </td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Add or edit a need-state</h2>
+<form method="post" action="{{ path_for('need_state_save') }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <p class="small muted">Use an existing key to edit that need-state.</p>
+  <div class="row">
+    <div><label for="key">Key</label><input id="key" name="key" type="text" placeholder="career" required style="max-width: 200px"></div>
+    <div style="flex: 1"><label for="label">Label</label><input id="label" name="label" type="text" required></div>
+    <div><label for="sort_order">Order</label><input id="sort_order" name="sort_order" type="number" value="100" style="max-width: 90px"></div>
+  </div>
+  <label for="description">One-line description</label><input id="description" name="description" type="text">
+  <label for="covers">Problems it covers</label><textarea id="covers" name="covers"></textarea>
+  <label for="not_covered">Out of scope for it</label><textarea id="not_covered" name="not_covered"></textarea>
+  <label for="active">Active</label><select id="active" name="active"><option value="on">Yes</option><option value="">No</option></select>
+  <p><button type="submit">Save need-state</button></p>
+</form>
+{% endblock %}

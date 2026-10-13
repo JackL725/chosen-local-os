@@ -5,7 +5,8 @@ paths: prompts/**, templates/**
 # Prompt and template rules
 
 - Prompt files are versioned: `prompts/<system>/<name>.vN.md`. Never edit a version in use; add a new
-  one, run its evals, and switch `worker/config.py` to it only if scores hold or improve.
+  one, run its evals, and switch the system's manifest (`PromptSpec`) to it only if scores hold or
+  improve.
 - Each prompt file starts with: purpose, inputs, output schema (the Pydantic model name), and the
   hard rules from CLAUDE.md that apply to it.
 - Prompts that produce prospect- or coach-facing drafts must instruct the model to use only the facts
