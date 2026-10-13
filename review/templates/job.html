@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Job{% endblock %}
+{% block content %}
+<h1>Job <code>{{ (job.id|string)[:8] }}</code></h1>
+<p class="lede">The job's state. Its payload and results are never shown here or in Slack.</p>
+<table>
+  <tr><th>Type</th><td><code>{{ job.job_type }}</code></td></tr>
+  <tr><th>Status</th><td><span class="chip {{ 'ok' if job.status == 'succeeded' else ('err' if job.status == 'failed' else '') }}">{{ job.status }}</span></td></tr>
+  <tr><th>Attempts</th><td>{{ job.attempts }} of {{ job.max_attempts }}</td></tr>
+  <tr><th>Error</th><td>{{ job.error_class or '' }} <span class="muted small">{{ job.error_detail or '' }}</span></td></tr>
+  <tr><th>Created</th><td>{{ job.created_at|when('%b %d %Y %H:%M:%S') }}</td></tr>
+  <tr><th>Finished</th><td>{{ job.finished_at|when('%b %d %Y %H:%M:%S') if job.finished_at else '' }}</td></tr>
+  <tr><th>For</th><td>{{ job.entity_type or '' }} <code class="small">{{ job.entity_id or '' }}</code></td></tr>
+</table>
+<p class="small"><a href="{{ path_for('timeline', entity_type='job', entity_id=job.id|string) }}">Domain events</a> ·
+   <a href="{{ path_for('timeline', entity_type='jobs', entity_id=job.id|string) }}">Row history</a></p>
+{% endblock %}

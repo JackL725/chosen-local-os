@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+<h1>History</h1>
+<p class="lede"><code>{{ entity_type }}</code> <code>{{ entity_id }}</code>, newest first. Sensitive fields show as changed, never their values.</p>
+{% if events %}
+<table>
+  <tr><th>When</th><th>Who</th><th>What</th><th>Changes</th></tr>
+  {% for e in events %}
+  <tr>
+    <td class="small">{{ e.occurred_at|when('%b %d %Y %H:%M:%S') }}</td>
+    <td>{{ e.actor }} <span class="muted small">{{ e.actor_kind }}</span></td>
+    <td><code>{{ e.event_type }}</code>{% if e.prompt_version %}<br><span class="small muted">{{ e.prompt_version }} · {{ e.model }}</span>{% endif %}</td>
+    <td class="small">
+      {% set v = e.payload.get('values', {}) %}
+      {% for k, val in v.items() %}<div><span class="muted">{{ k }}</span> {{ val }}</div>{% endfor %}
+      {% for k in e.payload.get('sensitive_changed') or [] %}<div><span class="muted">{{ k }}</span> <span class="chip">changed</span></div>{% endfor %}
+      {% for k, val in e.payload.items() if k not in ('values', 'changed', 'sensitive_changed') %}<div><span class="muted">{{ k }}</span> {{ val }}</div>{% endfor %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No recorded changes.</p>{% endif %}
+{% endblock %}

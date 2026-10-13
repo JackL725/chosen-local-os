@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<h1>Home</h1>
+<p class="lede">What the systems are doing, and anything waiting on a founder.</p>
+<div class="grid">
+  <div class="stat"><div class="n">{{ queue.pending }}</div><div class="l">jobs waiting</div></div>
+  <div class="stat"><div class="n">{{ queue.running }}</div><div class="l">jobs running</div></div>
+  <div class="stat"><div class="n">{{ queue.failed_24h }}</div><div class="l">failed in 24 h</div></div>
+  <div class="stat">
+    <div class="n">{% if queue.oldest_min is not none %}{{ queue.oldest_min }} min{% else %}–{% endif %}</div>
+    <div class="l">oldest waiting job (alert at {{ threshold_hours }} h)</div>
+  </div>
+  <div class="stat">
+    {% if heartbeat %}
+      <div class="n">{{ heartbeat.age_min }} min</div><div class="l">since the worker's last heartbeat</div>
+    {% else %}
+      <div class="n">never</div><div class="l">no worker has started yet</div>
+    {% endif %}
+  </div>
+</div>
+{% if off %}
+<h2>Systems turned off</h2>
+<p class="muted small">Their jobs wait in the queue. Turn them on under <a href="{{ path_for('systems') }}">Systems</a>.</p>
+<p>{% for s in off %}<span class="chip off">{{ s.title }}</span>{% endfor %}</p>
+{% endif %}
+<h2>Recent failed jobs</h2>
+{% if failed %}
+<table>
+  <tr><th>Job</th><th>Type</th><th>Error</th><th>Finished</th></tr>
+  {% for j in failed %}
+  <tr><td><a href="{{ path_for('job', job_id=j.id|string) }}"><code>{{ (j.id|string)[:8] }}</code></a></td>
+      <td>{{ j.job_type }}</td><td>{{ j.error_class }}</td><td class="small muted">{{ j.finished_at|when('%b %d %H:%M') if j.finished_at else '' }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">None.</p>{% endif %}
+{% endblock %}

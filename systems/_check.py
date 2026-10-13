@@ -162,6 +162,11 @@ def _check_manifest(m: Manifest, root: Path) -> list[str]:
             except (ImportError, AttributeError) as exc:
                 out.append(f"{k}: console routes do not resolve ({type(exc).__name__})")
 
+    templates = root / "systems" / k / "templates"
+    if templates.is_dir():
+        extra = sorted(p.name for p in templates.iterdir() if p.name != k)
+        if extra:
+            out.append(f"{k}: templates go in systems/{k}/templates/{k}/ (found {extra})")
     for stem in m.n8n_workflows:
         if not stem.startswith(f"{k}--"):
             out.append(f"{k}: n8n workflow {stem!r} must be named '{k}--<name>'")

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<h1>{{ founder.name }}</h1>
+<p class="lede">
+  {% if user.tailscale_login %}Tailscale login <strong>{{ user.tailscale_login }}</strong>.{% endif %}
+  {% if user.allow_local_signin %}May sign in on the workstation itself.{% endif %}
+  Password last changed {{ user.password_changed_at|when('%b %d, %Y') }}.
+</p>
+<h2>Signed-in sessions</h2>
+<table>
+  <tr><th>Where</th><th>Started</th><th>Last seen</th><th></th></tr>
+  {% for s in sessions %}
+  <tr><td>{{ 'workstation' if s.local else 'Tailscale' }}{% if s.id|string == founder.session_id %} <span class="chip on">this one</span>{% endif %}</td>
+      <td class="small">{{ s.created_at|when('%b %d %H:%M') }}</td><td class="small">{{ s.last_seen_at|when('%b %d %H:%M') }}</td>
+      <td>{% if s.id|string != founder.session_id %}
+        <form method="post" action="{{ path_for('account_revoke') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="session_id" value="{{ s.id }}"><button class="danger" type="submit">Sign out</button></form>
+      {% endif %}</td></tr>
+  {% endfor %}
+</table>
+<h2>Change password</h2>
+<form method="post" action="{{ path_for('account_password') }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="current_password">Current password</label><input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+  <label for="new_password">New password (12 characters or more)</label><input id="new_password" name="new_password" type="password" autocomplete="new-password" required minlength="12">
+  <label for="new_password_again">New password again</label><input id="new_password_again" name="new_password_again" type="password" autocomplete="new-password" required minlength="12">
+  <p><button type="submit">Change password</button></p>
+</form>
+{% endblock %}

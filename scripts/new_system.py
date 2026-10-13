@@ -194,22 +194,24 @@ so the event trigger records who did it.
 from __future__ import annotations
 '''
     if console:
-        files[f"systems/{key}/console.py"] = f'''"""{key} screens in the review console."""
+        files[
+            f"systems/{key}/console.py"
+        ] = f'''"""{key} screens in the review console (under /s/{key}/)."""
 
 from __future__ import annotations
 
-from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
 from review import web
 
 
-async def index(request: Request) -> Response:
-    return web.render(request, "{key}/index.html", {{"title": "{title}"}})
+@web.page
+def index(page: web.Page) -> Response:
+    return page.render("{key}/index.html", title="{title}")
 
 
-routes = [Route("/", index, name="{key}:index")]
+routes = [Route("/", index, name="index")]
 '''
         files[f"systems/{key}/templates/{key}/index.html"] = """{% extends "base.html" %}
 {% block content %}

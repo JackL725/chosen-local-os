@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Sign in · Review console</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  <main style="max-width: 420px">
+    <h1>Sign in</h1>
+    {% if tailscale_login %}
+      <p class="lede">Tailscale says this device belongs to <strong>{{ tailscale_login }}</strong>. Enter your console password.</p>
+    {% elif local_ok %}
+      <p class="lede">Signing in on the workstation itself. Only founders allowed to do this can.</p>
+    {% else %}
+      <p class="lede">Open the console through Tailscale (the address ending in <code>:8443</code>) to sign in.</p>
+    {% endif %}
+    {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+    {% if tailscale_login or local_ok %}
+    <form method="post" action="{{ path_for('signin') }}" class="panel">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      {% if not tailscale_login %}
+        <label for="name">Founder name</label>
+        <input id="name" name="name" type="text" autocomplete="username" required>
+      {% endif %}
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <p><button type="submit">Sign in</button></p>
+    </form>
+    {% endif %}
+  </main>
+</body>
+</html>

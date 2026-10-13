@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Markets{% endblock %}
+{% block content %}
+<h1>Markets</h1>
+<p class="lede">Cities the business serves. With one active market, new coaches and leads join it automatically; with more than one, each must say which.</p>
+<table>
+  <tr><th>Market</th><th>Time zone</th><th>Coaches</th><th>State</th></tr>
+  {% for m in markets %}
+  <tr><td><strong>{{ m.name }}</strong> <code class="small">{{ m.key }}</code></td><td>{{ m.time_zone }}</td><td>{{ m.coaches }}</td>
+      <td>{% if m.active %}<span class="chip on">active</span>{% else %}<span class="chip off">inactive</span>{% endif %}</td></tr>
+  {% endfor %}
+</table>
+<h2>Add or edit a market</h2>
+<form method="post" action="{{ path_for('market_save') }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="row">
+    <div><label for="key">Key</label><input id="key" name="key" type="text" placeholder="boulder" required style="max-width: 180px"></div>
+    <div><label for="name">Name</label><input id="name" name="name" type="text" required style="max-width: 240px"></div>
+    <div><label for="time_zone">Time zone</label><input id="time_zone" name="time_zone" type="text" placeholder="Region/City" required style="max-width: 220px"></div>
+    <div><label for="active">Active</label><select id="active" name="active"><option value="on">Yes</option><option value="">No</option></select></div>
+  </div>
+  <p><button type="submit">Save market</button></p>
+</form>
+{% endblock %}

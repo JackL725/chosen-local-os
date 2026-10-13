@@ -190,7 +190,7 @@ def test_scaffolded_system_runs_its_job_and_evals_without_touching_the_core(tmp_
     _copy_repo(tmp_path)
     core_before = {d: _tree_hash(tmp_path / d) for d in ("worker", "review")}
 
-    made = _run(tmp_path, "scripts/new_system.py", "demo_notes", "--model", "--tables")
+    made = _run(tmp_path, "scripts/new_system.py", "demo_notes", "--model", "--tables", "--console")
     assert made.returncode == 0, made.stderr
 
     check = _run(tmp_path, "scripts/check_systems.py")
@@ -216,6 +216,10 @@ def test_scaffolded_system_runs_its_job_and_evals_without_touching_the_core(tmp_
         result = evals_run.run("demo_notes", Path("evals/synthetic"), FakeLLM(), settings,
                                aggregate_only=True, out=io.StringIO())
         assert result["examples"] == 2 and result["accuracy"] == 1.0, result
+        from review.app import _routes
+        routes, nav = _routes()
+        assert any(getattr(r, "path", "") == "/s/demo_notes" for r in routes)
+        assert [n["system"] for n in nav] == ["demo_notes"] or "demo_notes" in [n["system"] for n in nav]
         print("probe ok")
         """
     )
